@@ -95,6 +95,43 @@ class AttachSpecRequest(BaseModel):
     spec_id: uuid.UUID
 
 
+# --- Session / cell write models ------------------------------------------
+
+
+class SessionCreate(BaseModel):
+    """Request body for ``POST /sessions``. All fields optional."""
+
+    title: str = "Untitled session"
+    spec_id: Optional[uuid.UUID] = None
+
+
+class CellCreate(BaseModel):
+    """Request body for ``POST /cells``.
+
+    ``order_index`` is optional; when omitted the cell is appended to the end
+    of its session.
+    """
+
+    session_id: uuid.UUID
+    cell_type: CellType = CellType.code
+    language: Optional[str] = None
+    content: str = ""
+    order_index: Optional[int] = None
+
+
+class CellUpdate(BaseModel):
+    """Request body for ``PUT /cells/{id}`` (source / metadata edit).
+
+    Only the provided fields are applied. ``last_output`` and ``status`` are
+    owned by execution (``POST /cells/{id}/run``) and are not editable here.
+    """
+
+    content: Optional[str] = None
+    cell_type: Optional[CellType] = None
+    language: Optional[str] = None
+    order_index: Optional[int] = None
+
+
 # --- Session timeline ------------------------------------------------------
 
 

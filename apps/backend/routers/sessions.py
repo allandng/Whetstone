@@ -1,7 +1,7 @@
 """Routes for problem-solving sessions.
 
-Stub CRUD endpoints for :class:`models.Session`. Bodies are placeholders
-until the persistence and domain logic land.
+CRUD for :class:`models.Session` plus the spec-attach and timeline reads.
+A session owns its cells and events; deleting one removes those too.
 """
 
 from __future__ import annotations
@@ -12,12 +12,14 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session as DBSession
+from sqlmodel import select
 
 from db import get_session
 from events import list_session_events
 from models import Event, Session as SessionModel, Spec
 from schemas import (
     AttachSpecRequest,
+    SessionCreate,
     SessionRead,
     SessionTimeline,
     TimelineEvent,
@@ -26,36 +28,68 @@ from schemas import (
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 
-@router.get("")
-async def list_sessions(db: DBSession = Depends(get_session)) -> list[dict]:
-    """List all sessions. Stub."""
+@router.get("", response_model=list[SessionRead])
+async def list_sessions(
+    db: DBSession = Depends(get_session),
+) -> list[SessionModel]:
+    """List all sessions, most recently modified first."""
 
-    return []
-
-
-@router.post("")
-async def create_session(db: DBSession = Depends(get_session)) -> dict:
-    """Create a new session. Stub."""
-
-    return {}
+    return list(
+        db.exec(select(SessionModel).order_by(SessionModel.modified_at.desc())).all()
+    )
 
 
-@router.get("/{session_id}")
+@router.post("", response_model=SessionRead)
+async def create_session(
+    body: SessionCreate | None = None,
+    db: DBSession = Depends(get_session),
+) -> SessionModel:
+    """Create a new session, optionally with a title and attached spec."""
+
+    body = body or SessionCreate()
+    if body.spec_id is not None and db.get(Spec, body.spec_id) is None:
+        raise HTTPException(status_code=404, detail="Spec not found.")
+
+    session = SessionModel(title=body.title, spec_id=body.spec_id)
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+@router.get("/{session_id}", response_model=SessionRead)
 async def get_session_detail(
-    session_id: int, db: DBSession = Depends(get_session)
-) -> dict:
-    """Fetch a single session by id. Stub."""
+    session_id: uuid.UUID, db: DBSession = Depends(get_session)
+) -> SessionModel:
+    """Fetch a single session by id."""
 
-    return {}
+    session = db.get(SessionModel, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    return session
 
 
 @router.delete("/{session_id}")
 async def delete_session(
-    session_id: int, db: DBSession = Depends(get_session)
+    session_id: uuid.UUID, db: DBSession = Depends(get_session)
 ) -> dict:
-    """Delete a session by id. Stub."""
+    """Delete a session and its cells and events.
 
-    return {}
+    Foreign-key enforcement is on (see ``db.py``), so the session's children
+    are removed first; SQLAlchemy orders the DELETEs within the transaction.
+    """
+
+    session = db.get(SessionModel, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    for cell in list(session.cells):
+        db.delete(cell)
+    for event in list(session.events):
+        db.delete(event)
+    db.delete(session)
+    db.commit()
+    return {"status": "deleted", "session_id": str(session_id)}
 
 
 @router.post("/{session_id}/spec", response_model=SessionRead)
