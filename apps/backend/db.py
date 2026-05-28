@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
+from sqlalchemy import event
 from sqlmodel import Session, SQLModel, create_engine
 
 from config import get_settings
@@ -27,12 +28,30 @@ engine = create_engine(
 )
 
 
-def init_db() -> None:
+@event.listens_for(engine, "connect")
+def _set_sqlite_pragmas(dbapi_connection, connection_record) -> None:
+    """Enable WAL journaling (and FK enforcement) on every connection.
+
+    WAL lets readers and a writer proceed concurrently, which matters for
+    a desktop app whose UI reads while a background task writes. SQLite
+    applies ``journal_mode`` per connection, so this must run on connect
+    rather than once at startup.
+    """
+
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA foreign_keys=ON")
+    finally:
+        cursor.close()
+
+
+def create_db_and_tables() -> None:
     """Create all tables registered on the SQLModel metadata.
 
-    Stub: relies on the table models being imported so their metadata is
-    registered before ``create_all`` runs. Migrations are out of scope
-    for the skeleton.
+    Imports :mod:`models` so the table classes register their metadata
+    before ``create_all`` runs. Once Alembic migrations are in use this
+    becomes a convenience for tests and first-run bootstrapping.
     """
 
     import models  # noqa: F401  (ensure models are registered)
