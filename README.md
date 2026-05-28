@@ -98,6 +98,53 @@ It borrows its backend shape from LoomAssist (Tauri + FastAPI + SQLModel) and it
 
 Build and run instructions will land here once the backend is in place.
 
+## Repository layout
+
+This is a monorepo. The two apps and the standalone execution service are
+developed and run independently.
+
+```
+whetstone/
+├── apps/
+│   ├── desktop/            # Tauri + React (TypeScript) front end
+│   └── backend/            # FastAPI backend
+│       ├── main.py         # app factory, mounts routers
+│       ├── db.py           # SQLite engine + session factory (SQLModel)
+│       ├── models.py       # SQLModel table stubs
+│       ├── config.py       # pydantic-settings configuration
+│       ├── routers/        # sessions, cells, ai, spec
+│       └── services/       # psirver / llm / stt HTTP client stubs
+├── services/
+│   └── psirver/            # C++ code-execution backend (placeholder)
+├── docs/                   # SRS and design docs
+└── README.md
+```
+
+## Running locally (development)
+
+The backend and the desktop front end are started separately.
+
+**Backend** (FastAPI, serves on `http://127.0.0.1:8000`):
+
+```sh
+cd apps/backend
+python -m venv .venv && source .venv/bin/activate
+pip install -e .
+uvicorn main:app --reload
+```
+
+**Frontend** (Tauri + React):
+
+```sh
+cd apps/desktop
+npm install
+npm run tauri dev
+```
+
+The desktop app talks to the backend over loopback; the backend in turn
+talks to Psirver, llama-server, and whisper-server over loopback (see
+[Architecture](#architecture)).
+
 ## Roadmap
 
 The build order, roughly:
