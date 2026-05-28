@@ -1,9 +1,12 @@
 import { useState } from "react";
 import reactLogo from "./assets/react.svg";
 import { invoke } from "@tauri-apps/api/core";
+import Timeline from "./components/Timeline";
 import "./App.css";
 
-function App() {
+type View = "home" | "timeline";
+
+function HomeView() {
   const [greetMsg, setGreetMsg] = useState("");
   const [name, setName] = useState("");
 
@@ -13,7 +16,7 @@ function App() {
   }
 
   return (
-    <main className="container">
+    <div className="home">
       <h1>Welcome to Tauri + React</h1>
 
       <div className="row">
@@ -44,7 +47,64 @@ function App() {
         <button type="submit">Greet</button>
       </form>
       <p>{greetMsg}</p>
-    </main>
+    </div>
+  );
+}
+
+function TimelineView() {
+  const [sessionInput, setSessionInput] = useState("");
+  const [sessionId, setSessionId] = useState("");
+
+  return (
+    <div className="timeline-view">
+      <h1>Session Timeline</h1>
+      <form
+        className="row timeline-view__form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setSessionId(sessionInput.trim());
+        }}
+      >
+        <input
+          value={sessionInput}
+          onChange={(e) => setSessionInput(e.currentTarget.value)}
+          placeholder="Session ID (UUID)…"
+        />
+        <button type="submit">Load</button>
+      </form>
+      <Timeline sessionId={sessionId} />
+    </div>
+  );
+}
+
+function App() {
+  const [view, setView] = useState<View>("home");
+
+  return (
+    <div className="app-shell">
+      <nav className="sidebar">
+        <span className="sidebar__brand">Whetstone</span>
+        <button
+          type="button"
+          className={view === "home" ? "sidebar__link is-active" : "sidebar__link"}
+          onClick={() => setView("home")}
+        >
+          Home
+        </button>
+        <button
+          type="button"
+          className={
+            view === "timeline" ? "sidebar__link is-active" : "sidebar__link"
+          }
+          onClick={() => setView("timeline")}
+        >
+          Timeline
+        </button>
+      </nav>
+      <main className="content">
+        {view === "home" ? <HomeView /> : <TimelineView />}
+      </main>
+    </div>
   );
 }
 

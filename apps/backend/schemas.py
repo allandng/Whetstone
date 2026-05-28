@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -65,13 +65,57 @@ class RequirementItemRead(BaseModel):
     status: RequirementStatus
 
 
-class EventRead(BaseModel):
-    """Response schema for a :class:`models.Event`."""
+# --- Spec import / requirements -------------------------------------------
 
-    model_config = ConfigDict(from_attributes=True)
+
+class SpecImportResponse(BaseModel):
+    """Returned immediately from ``POST /specs/import``.
+
+    ``status`` is always ``"extracting"``: the Spec row is persisted before the
+    response, while requirement extraction runs in a background task.
+    """
+
+    spec_id: uuid.UUID
+    status: str
+
+
+class RequirementUpdate(BaseModel):
+    """Request body for ``PATCH /requirements/{id}`` (manual edit).
+
+    Both fields are optional; only the ones provided are applied.
+    """
+
+    status: Optional[RequirementStatus] = None
+    text: Optional[str] = None
+
+
+class AttachSpecRequest(BaseModel):
+    """Request body for ``POST /sessions/{id}/spec``."""
+
+    spec_id: uuid.UUID
+
+
+# --- Session timeline ------------------------------------------------------
+
+
+class TimelineEvent(BaseModel):
+    """An :class:`models.Event` with its payload decoded from JSON."""
 
     id: uuid.UUID
     session_id: uuid.UUID
     timestamp: datetime
     event_type: str
-    payload: str
+    payload: dict[str, Any]
+
+
+class SessionTimeline(BaseModel):
+    """Response schema for ``GET /sessions/{id}/timeline``.
+
+    ``events`` is the flat list ordered by timestamp (what the UI renders and
+    replays); ``groups`` buckets the same events by ``event_type`` (CELL_RUN,
+    CELL_RESULT, AI_EXCHANGE, MODE_SWITCH, VOICE_NOTE, ...).
+    """
+
+    session_id: uuid.UUID
+    events: list[TimelineEvent]
+    groups: dict[str, list[TimelineEvent]]
