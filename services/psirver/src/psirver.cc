@@ -1,0 +1,295 @@
+#include <cassert>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <string>
+#include <sys/stat.h>
+#include <syslog.h>
+#include <unistd.h>
+#include <thread>
+
+#include "utils.hh"
+#include "Tasks.hh"
+#include "Jobs.hh"
+
+// Configuration options and other constants
+static constexpr ssize_t MAX_REQUEST_SZ = 0x10000;
+static constexpr size_t READ_BUFFER_SZ = 0x1000;
+
+// Global variables (are evil)
+int server_socket;
+std::string pid_path;
+
+// Reply to the client with an HTTP status line and a human-readable
+// response body. Library functions used:
+// - std::to_string()
+void reply(int client, const char *status_line, const char *body)
+{
+  std::string headers;
+  headers.reserve(256);
+  headers.append(status_line);
+  headers.append(RN);
+  headers.append("Content-Type: text/plain; charset=utf-8");
+  headers.append(RN);
+  headers.append("Content-Length: ");
+  headers.append(std::to_string(strlen(body)));
+  headers.append(RN);
+  headers.append("Connection: close");
+  headers.append(END_OF_HEADER);
+
+  write(client, headers.data(), headers.size());
+  write(client, body, strlen(body));
+  close(client);
+}
+
+// Reply with a length-delimited body and an explicit content type. Unlike
+// reply(), this is safe for bodies (captured stdout/stderr, JSON) that may
+// contain embedded NUL bytes.
+void reply_data(int client, const char *status_line, const std::string &body,
+		const char *content_type)
+{
+  std::string headers;
+  headers.reserve(256);
+  headers.append(status_line);
+  headers.append(RN);
+  headers.append("Content-Type: ");
+  headers.append(content_type);
+  headers.append(RN);
+  headers.append("Content-Length: ");
+  headers.append(std::to_string(body.size()));
+  headers.append(RN);
+  headers.append("Connection: close");
+  headers.append(END_OF_HEADER);
+
+  write(client, headers.data(), headers.size());
+  write(client, body.data(), body.size());
+  close(client);
+}
+
+int init_socket(uint16_t port)
+{
+  server_socket = socket(AF_INET, SOCK_STREAM, 0);
+  if (server_socket < 0) {
+    syslog(LOG_ERR, "Socket: %s", strerror(errno));
+    return -1;
+  }
+
+  struct sockaddr_in server_addr{};
+  server_addr.sin_family = AF_INET;
+  // Psirver is a loopback-only service (SRS NFR-SEC): it must never be
+  // reachable from a routable interface. Bind to 127.0.0.1 and assert the
+  // invariant so a future edit to INADDR_ANY fails loudly.
+  server_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  assert(server_addr.sin_addr.s_addr == htonl(INADDR_LOOPBACK));
+  server_addr.sin_port = htons(port);
+
+  // Allow address reuse to prevent "Address already in use" errors on restart
+  int opt = 1;
+  setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+  if (bind(server_socket, reinterpret_cast<sockaddr *>(&server_addr),
+	   sizeof(server_addr)) < 0) {
+    syslog(LOG_ERR, "Bind: %s", strerror(errno));
+    close(server_socket);
+    return -1;
+  }
+
+  if (listen(server_socket, SOMAXCONN) != 0) {
+    syslog(LOG_ERR, "Listen: %s", strerror(errno));
+    close(server_socket);
+    return -1;
+  }
+
+  if(-1 == fcntl(server_socket, F_SETFD, FD_CLOEXEC)) {
+    syslog(LOG_WARNING, "fcntl: %s", strerror(errno));
+  }
+
+  return 0;
+}
+
+// Given the headers, extract the context length (only for
+// POST). Library functions used:
+// - std::stoi()
+
+static ssize_t parse_content_length(int client, std::string headers)
+{
+  constexpr char CL[] = "Content-Length: ";
+  size_t pos = headers.find(CL);
+  if (pos == std::string::npos) {
+    reply(client, "HTTP/1.1 411 Length Required", "Length Required");
+    return -1;
+  }
+
+  try {
+      std::string rest = headers.substr(pos + sizeof CL - 1);
+      size_t content_length_end = rest.find("\r\n");
+      std::string content_length_str = rest.substr(0, content_length_end);
+      size_t content_length = std::stoul(content_length_str);
+
+      if (content_length > MAX_REQUEST_SZ) {
+        reply(client, "HTTP/1.1 413 Content Too Large", "Content Too Large");
+        return -1;
+      }
+      return content_length;
+  } catch (...) {
+      reply(client, "HTTP/1.1 400 Bad Request", "Bad Request: Invalid Content-Length");
+      return -1;
+  }
+}
+
+std::string read_body(int client, ssize_t content_length, std::string body)
+{
+  size_t remaining = content_length - body.length();
+
+  char buffer[READ_BUFFER_SZ];
+  while (remaining > 0) {
+    ssize_t read_len = std::min((ssize_t)remaining, (ssize_t)sizeof(buffer));
+    ssize_t chunk_sz = read(client, buffer, read_len);
+    if (chunk_sz > 0) {
+      body.append(buffer, chunk_sz);
+      remaining -= chunk_sz;
+    } else if (chunk_sz == 0) {
+      break; // Socket closed prematurely
+    } else {
+      break;
+    }
+  }
+  return body;
+}
+
+// Accept a connection, read the request, parse the headers and the
+// body (for POST). The function returns a new Task on success and
+// nullptr on failure. Library functions used:
+// - accept()
+// - read()
+
+Task *request2task()
+{
+  struct sockaddr_in client_addr;
+  socklen_t addrlen = sizeof client_addr;
+
+  int client = accept(server_socket, (struct sockaddr *)&client_addr, &addrlen);
+  if(client < 0) {
+    syslog(LOG_ERR, "Accept: %s", strerror(errno));
+    return nullptr;
+  }
+
+  char buffer[READ_BUFFER_SZ];
+  size_t header_end_pos = std::string::npos;
+  ssize_t chunk_sz;
+  std::string request;
+
+  while (request.size() < MAX_REQUEST_SZ &&
+	 (chunk_sz = read(client, buffer, sizeof(buffer))) > 0) {
+    request.append(buffer, chunk_sz);
+    header_end_pos = request.find(END_OF_HEADER);
+    if (header_end_pos != std::string::npos) {
+      break;
+    }
+  }
+
+  if (chunk_sz < 0) {
+      close(client);
+      return nullptr;
+  }
+
+  if (request.size() > MAX_REQUEST_SZ) {
+    reply(client, "HTTP/1.1 413 Content Too Large", "Content Too Large");
+    return nullptr;
+  }
+
+  if(request.compare(0, strlen("GET "), "GET ") == 0) {
+    std::string headers = request.substr(0, header_end_pos);
+
+    Task *task = Task::construct(client, headers);
+
+    if(!task) {
+      reply(client, "HTTP/1.1 400 Bad Request", "Bad Request");
+      return nullptr;
+    }
+
+    return task;
+  }
+
+  if(request.compare(0, 5, "POST ") == 0) {
+    std::string headers = request.substr(0, header_end_pos);
+    ssize_t content_length = parse_content_length(client, headers);
+
+    if (content_length < 0) {
+      return nullptr;
+    }
+
+    std::string body = request.substr(header_end_pos + sizeof END_OF_HEADER - 1);
+    body = read_body(client, content_length, body);
+
+    Task *task = Task::construct(client, headers, body);
+    if(!task) {
+      reply(client, "HTTP/1.1 400 Bad Request", "Bad Request");
+      return nullptr;
+    }
+
+    return task;
+  }
+
+  reply(client, "HTTP/1.1 405 Method Not Allowed",
+	(request.substr(0, 0x10) + "...").c_str());
+  return nullptr;
+}
+
+// SIGINT handler. Will cause a graceful shutdown. Library functions used:
+// - close()
+// - unlink()
+// - syslog()
+// - exit()
+void graceful_shutdown(int /* sig_num */)
+{
+  Script::terminate_all();
+
+  close(server_socket);
+  if (unlink(pid_path.c_str()) != 0) {
+    syslog(LOG_WARNING, "Unlink(%s): %s", pid_path.c_str(), strerror(errno));
+  }
+  syslog(LOG_USER, "Terminated.");
+  exit(EXIT_SUCCESS);
+}
+
+// The main workhorse. Library functions used:
+// - none
+int main(int argc, char **argv)
+{
+  // Select the server port
+  uint16_t server_port = select_port(argc, argv);
+
+  // Initialize the server socket
+  if(init_socket(server_port) < 0 || server_socket < 0) {
+    return EXIT_FAILURE;
+  }
+
+  // Create $(PSIRVER_HOME)/psirver.pid (also chdir()s into PSIRVER_HOME)
+  pid_path = init_pid_file();
+
+  // Register a graceful shutdown handler on SIGINT
+  add_sigint_handler();
+
+  // Ensure the script repository directory exists (UploadTask creates only
+  // the per-script subdirectory under it).
+  ::mkdir(SCRIPTS_PATH, S_IRWXU); // best effort; EEXIST is fine
+
+  // Create the jobs/ output directory and launch the background reaper
+  // that collects exited child processes and finalizes job status.
+  job_manager.start();
+
+  // The main loop
+  while(true) { // Not really, but close
+    Task *task = request2task();
+
+    // Main processing happens here
+    if (task) {
+      std::thread t([task]() {
+        task->execute_in_thread();  // calls execute() + delete this
+      });
+      t.detach();
+    }
+  }
+
+  return EXIT_SUCCESS;
+}
