@@ -11,6 +11,7 @@ This module owns the engine; routers and services should depend on
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import contextmanager
 
 from sqlalchemy import event
 from sqlmodel import Session, SQLModel, create_engine
@@ -61,6 +62,21 @@ def create_db_and_tables() -> None:
 
 def get_session() -> Iterator[Session]:
     """FastAPI dependency that yields a database session."""
+
+    with Session(engine) as session:
+        yield session
+
+
+@contextmanager
+def session_scope() -> Iterator[Session]:
+    """Yield a session for work that outlives a single request.
+
+    The ``get_session`` dependency is torn down when its request ends, which
+    is the wrong lifetime for writes performed while a streaming response is
+    still being produced (e.g. appending an AI exchange to the event log
+    once the stream finishes). This gives such code a sanctioned session
+    rather than reaching for the engine directly.
+    """
 
     with Session(engine) as session:
         yield session
