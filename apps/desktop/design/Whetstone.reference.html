@@ -1,0 +1,657 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Whetstone — Local CS Workspace</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    /* ──────────────────────────────────────────────────────────────────
+       Semantic design tokens (utilitarian dark / VS Code lineage).
+       Centralised so the React/Tauri port can map these 1:1 to a theme.
+       ────────────────────────────────────────────────────────────────── */
+    :root {
+      --bg-base:      #09090b;  /* app shell                 */
+      --bg-panel:     #0a0a0b;  /* side panels / chrome      */
+      --bg-canvas:    #0c0c0e;  /* center notebook canvas    */
+      --bg-elevated:  #18181b;  /* hover / raised surfaces   */
+      --bg-inset:     #000000;  /* terminal frame            */
+
+      --border-hair:  #18181b;  /* zinc-900 — hairline       */
+      --border-soft:  #27272a;  /* zinc-800 — control border */
+
+      --fg-strong:    #fafafa;  /* primary text              */
+      --fg:           #d4d4d8;  /* body text                 */
+      --fg-muted:     #a1a1aa;  /* labels                    */
+      --fg-faint:     #71717a;  /* secondary labels          */
+      --fg-dim:       #52525b;  /* decorative / line numbers */
+
+      --accent-run:   #10b981;  /* emerald — execute / done  */
+      --accent-run-2: #34d399;
+      --accent-warn:  #f59e0b;  /* amber — in progress       */
+      --accent-warn-2:#fbbf24;
+      --accent-stop:  #ef4444;  /* red — recording / danger  */
+      --accent-stop-2:#f87171;
+
+      --ring:         #a1a1aa;  /* focus ring — kept monochrome but VISIBLE */
+    }
+
+    html, body, #root { height: 100%; }
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      background: var(--bg-base);
+      color: var(--fg-strong);
+      overflow: hidden;
+    }
+    .font-mono, code, pre, kbd {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-feature-settings: "calt" 0, "ss01" 1;
+    }
+
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-thumb { background: var(--border-soft); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
+    ::-webkit-scrollbar-track { background: transparent; }
+
+    @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .pulse-dot { animation: pulse-dot 1.2s ease-in-out infinite; }
+
+    @keyframes wave { 0%, 100% { transform: scaleY(0.3); } 50% { transform: scaleY(1); } }
+    .wbar { transform-origin: bottom; animation: wave 1s ease-in-out infinite; }
+
+    @keyframes slideup { from { transform: translateY(12px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    .drawer-in { animation: slideup 200ms cubic-bezier(0.16, 1, 0.3, 1); }
+
+    /* Visible, on-brand focus ring (the prototype's #27272a ring was
+       effectively invisible against the zinc-900 chrome). */
+    :focus-visible {
+      outline: 2px solid var(--ring);
+      outline-offset: 1px;
+      border-radius: 3px;
+    }
+    button, [role="button"], a, input, select { cursor: pointer; }
+    input[type="text"] { cursor: text; }
+
+    /* Honour reduced-motion: kill the looping/decorative animations and
+       collapse transitions to near-instant. (Missing from the prototype.) */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+      }
+    }
+  </style>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" data-presets="env,react">
+  const { useState, useEffect, useRef, useMemo, useCallback } = React;
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Icon set — single stroke language (1.5px), Lucide-derived stems.
+  // ─────────────────────────────────────────────────────────────────────────
+  const Svg = ({ size = 14, stroke = 1.5, className = '', children }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24"
+      fill="none" stroke="currentColor" strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round"
+      aria-hidden="true" focusable="false" className={className}>{children}</svg>
+  );
+
+  const I = {
+    Mic:    (p) => <Svg {...p}><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></Svg>,
+    Play:   (p) => <Svg {...p}><polygon points="6 3 20 12 6 21 6 3" fill="currentColor"/></Svg>,
+    Stop:   (p) => <Svg {...p}><rect x="6" y="6" width="12" height="12" fill="currentColor"/></Svg>,
+    Cog:    (p) => <Svg {...p}><circle cx="12" cy="12" r="3"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41m11.32-11.32l1.41-1.41"/></Svg>,
+    Down:   (p) => <Svg {...p}><polyline points="6 9 12 15 18 9"/></Svg>,
+    Plus:   (p) => <Svg {...p}><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></Svg>,
+    Bot:    (p) => <Svg {...p}><rect x="3" y="8" width="18" height="12" rx="2"/><path d="M12 2v6M9 14h.01M15 14h.01"/></Svg>,
+    User:   (p) => <Svg {...p}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></Svg>,
+    Clock:  (p) => <Svg {...p}><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 16 14"/></Svg>,
+    X:      (p) => <Svg {...p}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></Svg>,
+    Send:   (p) => <Svg {...p}><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></Svg>,
+    File:   (p) => <Svg {...p}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></Svg>,
+    Alert:  (p) => <Svg {...p}><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></Svg>,
+  };
+
+  const STATUS = {
+    not_started: { label: 'Not started', dot: 'bg-zinc-600',    aria: 'Not started' },
+    in_progress: { label: 'In progress', dot: 'bg-amber-500',   aria: 'In progress' },
+    done:        { label: 'Done',        dot: 'bg-emerald-500', aria: 'Done' },
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Lightweight C++ tokenizer for the code cell (display only).
+  // ─────────────────────────────────────────────────────────────────────────
+  const KEYWORDS = new Set(['int','return','include','main','void','std','cout','endl']);
+  function CodeBlock({ code }) {
+    const lines = useMemo(() => code.split('\n'), [code]);
+    return (
+      <div className="font-mono text-[13px] leading-6 py-3 tracking-normal select-text">
+        {lines.map((line, li) => {
+          const out = [];
+          let i = 0;
+          while (i < line.length) {
+            const rest = line.slice(i);
+            let m;
+            if ((m = rest.match(/^\/\/.*/)))            { out.push(<span key={i} className="text-zinc-600 italic">{m[0]}</span>); break; }
+            if ((m = rest.match(/^#\w+/)))              { out.push(<span key={i} className="text-zinc-500">{m[0]}</span>); i += m[0].length; continue; }
+            if ((m = rest.match(/^"[^"]*"/)))           { out.push(<span key={i} className="text-emerald-300/80">{m[0]}</span>); i += m[0].length; continue; }
+            if ((m = rest.match(/^<[^>]+>/)))           { out.push(<span key={i} className="text-zinc-400">{m[0]}</span>); i += m[0].length; continue; }
+            if ((m = rest.match(/^[a-zA-Z_][a-zA-Z0-9_]*/))) {
+              out.push(<span key={i} className={KEYWORDS.has(m[0]) ? 'text-zinc-100 font-medium' : 'text-zinc-300'}>{m[0]}</span>);
+              i += m[0].length; continue;
+            }
+            out.push(line[i]); i++;
+          }
+          return (
+            <div key={li} className="flex h-6 items-center">
+              <span className="w-11 pr-4 text-right text-zinc-700 select-none text-[11px] font-sans font-medium" aria-hidden="true">{li + 1}</span>
+              <span className="whitespace-pre text-zinc-300">{out.length ? out : ' '}</span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Requirement status menu — click + keyboard (Esc to close), labelled.
+  // ─────────────────────────────────────────────────────────────────────────
+  function StatusTrigger({ status, reqId, onChange }) {
+    const [open, setOpen] = useState(false);
+    const ref = useRef(null);
+    useEffect(() => {
+      const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+      const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+      document.addEventListener('mousedown', onDoc);
+      document.addEventListener('keydown', onKey);
+      return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey); };
+    }, []);
+
+    return (
+      <div ref={ref} className="relative">
+        <button
+          onClick={() => setOpen(!open)}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label={`Status for ${reqId}: ${STATUS[status].aria}. Change status`}
+          className="flex items-center gap-1.5 px-2 py-1 rounded bg-zinc-900 border border-zinc-800 text-[11px] text-zinc-300 hover:text-zinc-100 hover:border-zinc-700 transition-colors duration-150">
+          <span className={`w-1.5 h-1.5 rounded-full ${STATUS[status].dot}`}></span>
+          <span>{STATUS[status].label}</span>
+          <I.Down size={11} className="text-zinc-500" />
+        </button>
+        {open && (
+          <div role="menu" className="absolute right-0 top-full mt-1 z-50 bg-zinc-900 border border-zinc-800 rounded shadow-xl w-36 py-1">
+            {Object.keys(STATUS).map(s => (
+              <button key={s} role="menuitemradio" aria-checked={s === status}
+                onClick={() => { onChange(s); setOpen(false); }}
+                className="w-full text-left px-2.5 py-1.5 text-[11px] text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 flex items-center gap-2 font-medium transition-colors duration-150">
+                <span className={`w-1.5 h-1.5 rounded-full ${STATUS[s].dot}`}></span>
+                {STATUS[s].label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Header — brand, breadcrumb, local-engine indicator, dictate toggle.
+  // ─────────────────────────────────────────────────────────────────────────
+  function Header({ recording, setRecording }) {
+    return (
+      <header className="h-11 shrink-0 border-b border-zinc-900 bg-zinc-950 flex items-center justify-between px-4 select-none">
+        <div className="flex items-center gap-3">
+          <div className="w-5 h-5 bg-zinc-100 flex items-center justify-center rounded-[3px]" aria-hidden="true">
+            <div className="w-2 h-2 bg-zinc-950 rotate-45"></div>
+          </div>
+          <span className="font-semibold text-zinc-100 text-sm tracking-tight">Whetstone</span>
+          <span className="w-px h-3 bg-zinc-800" aria-hidden="true"></span>
+          <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 font-mono text-[11px] text-zinc-400">
+            <span>cs375-hw3</span>
+            <span className="text-zinc-700" aria-hidden="true">/</span>
+            <span className="text-zinc-200">main.cpp</span>
+          </nav>
+        </div>
+
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-300" title="All processing on-device">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 pulse-dot" aria-hidden="true"></span>
+            <span>Local engine · offline</span>
+          </div>
+
+          <button onClick={() => setRecording(!recording)}
+            aria-pressed={recording}
+            aria-label={recording ? 'Stop voice dictation' : 'Start voice dictation'}
+            className={`h-7 px-2.5 rounded flex items-center gap-2 border font-medium text-[11px] transition-all duration-200 ${
+              recording ? 'bg-red-950/30 border-red-800 text-red-300' : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:text-zinc-100 hover:border-zinc-700'
+            }`}>
+            <I.Mic size={12} className={recording ? 'text-red-400' : ''} />
+            {recording ? (
+              <span className="flex items-center gap-2">
+                <span className="flex items-end gap-[2px] h-3" aria-hidden="true">
+                  {[0,1,2,3].map(n => (
+                    <span key={n} className="wbar w-[2px] bg-red-400 rounded-full" style={{ height: '100%', animationDelay: `${n * 0.12}s` }}></span>
+                  ))}
+                </span>
+                <span>Recording</span>
+              </span>
+            ) : <span>Dictate</span>}
+          </button>
+
+          <button aria-label="Settings" className="text-zinc-400 hover:text-zinc-200 transition-colors duration-150">
+            <I.Cog size={14} />
+          </button>
+        </div>
+      </header>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Pane 1 — Spec parser + tracked requirement checklist.
+  // Text restored to the spec-accurate wording from the design brief.
+  // ─────────────────────────────────────────────────────────────────────────
+  function PaneLeft({ requirements, setRequirements }) {
+    const updateStatus = (id, status) => setRequirements(rs => rs.map(r => r.id === id ? { ...r, status } : r));
+    const doneCount = requirements.filter(r => r.status === 'done').length;
+
+    return (
+      <aside className="w-[310px] shrink-0 border-r border-zinc-900 bg-zinc-950 flex flex-col" aria-label="Tracked requirements">
+        <div className="h-9 px-3 flex items-center justify-between border-b border-zinc-900">
+          <span className="text-[11px] font-medium text-zinc-300 tracking-tight">Tracked Requirements</span>
+          <span className="font-mono text-[10px] text-zinc-500">{doneCount}/{requirements.length}</span>
+        </div>
+
+        <ul className="flex-1 overflow-y-auto px-2 py-3 space-y-2 list-none m-0">
+          {requirements.map((r) => (
+            <li key={r.id} className="p-2.5 rounded bg-zinc-900/40 border border-zinc-900 hover:border-zinc-800 transition-colors duration-150 flex flex-col gap-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-mono text-[10px] uppercase font-semibold tracking-wider text-zinc-400">{r.id}</span>
+                <StatusTrigger status={r.status} reqId={r.id} onChange={(s) => updateStatus(r.id, s)} />
+              </div>
+              <p className="text-[12px] text-zinc-300 leading-normal">{r.text}</p>
+              {r.id === 'FR-SPEC-7' && (
+                <div className="mt-1 flex items-center gap-1.5 text-[10px] text-amber-400 font-medium">
+                  <I.Alert size={11} />
+                  <span>Advisory: approach in cell 01 may exceed the O(n log n) bound</span>
+                </div>
+              )}
+            </li>
+          ))}
+
+          <li className="pt-4 border-t border-zinc-900 mt-2 px-1 list-none">
+            <div className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2">Automated extraction</div>
+            <div className="p-2 rounded border border-dashed border-zinc-800 text-zinc-400 text-[11.5px] leading-relaxed">
+              Gemma 4 extracted 3 requirement items from <span className="text-zinc-200 font-mono">hw3.pdf</span>. Edit or reorder any item — extraction is advisory.
+            </div>
+          </li>
+        </ul>
+      </aside>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Pane 2 — Cell-based notebook + inline terminal (Psirver job lifecycle).
+  // ─────────────────────────────────────────────────────────────────────────
+  const CELL_CODE = `// Compiled via system clang++ toolchain
+#include <iostream>
+#include <unistd.h>
+
+int main() {
+    std::cout << "[Psirver] Init loopback worker PID: " << getpid() << std::endl;
+    return 0;
+}`;
+
+  function PaneCenter({ onCellRun }) {
+    const [execState, setExecState] = useState('idle'); // idle | running | completed
+    const [outputs, setOutputs] = useState([]);
+    const timer = useRef(null);
+
+    useEffect(() => () => clearTimeout(timer.current), []);
+
+    const triggerRun = () => {
+      if (execState === 'running') return;
+      setExecState('running');
+      setOutputs([]);
+      onCellRun?.();
+      timer.current = setTimeout(() => {
+        setOutputs([
+          { prefix: 'System',  text: 'Compiling main.cpp via clang++… Success.',               cls: 'text-zinc-400' },
+          { prefix: 'Psirver', text: 'POST /scripts/cell_82d/run → 202 Accepted (Job ID #4019)', cls: 'text-zinc-300' },
+          { prefix: 'Job',     text: 'Uploaded → Queued → Running',                              cls: 'text-zinc-400' },
+          { prefix: 'Stdout',  text: '[Psirver] Init loopback worker PID: 28419',               cls: 'text-zinc-100' },
+          { prefix: 'Process', text: 'Exited with status 0 (Completed)',                        cls: 'text-emerald-400 font-medium' },
+        ]);
+        setExecState('completed');
+      }, 1100);
+    };
+
+    const terminate = () => {
+      clearTimeout(timer.current);
+      setOutputs(prev => [...prev, { prefix: 'Signal', text: 'SIGTERM sent → job #4019 Terminated', cls: 'text-red-400 font-medium' }]);
+      setExecState('idle');
+    };
+
+    return (
+      <main className="flex-1 min-w-0 flex flex-col" style={{ background: 'var(--bg-canvas)' }} aria-label="Notebook">
+        <div className="h-9 shrink-0 flex items-center border-b border-zinc-900 bg-zinc-950 px-3 justify-between">
+          <div className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-200">
+            <I.File size={12} className="text-zinc-500" />
+            <span>scratchpad.cpp</span>
+          </div>
+          <div className="text-[11px] font-mono text-zinc-500">clang++ 17.0 · loopback mode</div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 max-w-4xl w-full mx-auto space-y-4">
+          <div className="rounded border border-zinc-900 bg-zinc-950 overflow-hidden">
+            <div className="h-8 bg-zinc-900/40 border-b border-zinc-900 px-3 flex items-center justify-between">
+              <span className="text-[10px] font-mono tracking-wider font-semibold uppercase text-zinc-400">Cell 01 · C++</span>
+              <div className="flex items-center gap-2">
+                <button onClick={triggerRun} disabled={execState === 'running'}
+                  aria-label="Run cell"
+                  className="h-5 px-2 rounded bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-emerald-400 text-[11px] font-medium flex items-center gap-1 disabled:opacity-50 transition-colors duration-150">
+                  <I.Play size={9} /> Run
+                </button>
+                <button onClick={terminate} disabled={execState !== 'running'}
+                  aria-label="Terminate job"
+                  className="h-5 px-2 rounded bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 text-[11px] font-medium flex items-center gap-1 disabled:opacity-40 transition-colors duration-150">
+                  <I.Stop size={9} /> Stop
+                </button>
+                <button onClick={() => { clearTimeout(timer.current); setExecState('idle'); setOutputs([]); }}
+                  className="h-5 px-2 rounded bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-400 text-[11px] font-medium transition-colors duration-150">
+                  Clear
+                </button>
+              </div>
+            </div>
+
+            <div className="bg-zinc-950 px-1">
+              <CodeBlock code={CELL_CODE} />
+            </div>
+
+            <div className="border-t border-zinc-900 p-3 font-mono text-[12px] leading-relaxed min-h-[132px]"
+              style={{ background: 'var(--bg-inset)' }}
+              role="log" aria-live="polite" aria-label="Cell output">
+              {outputs.length === 0 && execState !== 'running' && (
+                <div className="text-zinc-700 select-none">
+                  <span>$ ./engine_worker</span>
+                  <p className="text-[11px] mt-1 text-zinc-700 italic">No output recorded. Press Run.</p>
+                </div>
+              )}
+              {execState === 'running' && (
+                <div className="text-zinc-400 flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500 pulse-dot"></span>
+                  <span>Polling local process telemetry via loopback pipes…</span>
+                </div>
+              )}
+              {outputs.map((o, idx) => (
+                <div key={idx} className="flex gap-3">
+                  <span className="text-zinc-600 w-16 select-none shrink-0">[{o.prefix}]</span>
+                  <span className={`${o.cls} flex-1`}>{o.text}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <button className="w-full h-9 rounded border border-dashed border-zinc-800 text-zinc-500 hover:text-zinc-300 hover:border-zinc-700 text-[12px] font-medium flex items-center justify-center gap-1.5 transition-colors duration-150">
+            <I.Plus size={13} /> Add cell
+          </button>
+        </div>
+      </main>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Pane 3 — Socratic AI co-pilot. Direct vs Socratic shifts accent + body.
+  // ─────────────────────────────────────────────────────────────────────────
+  function PaneRight({ mode, setMode }) {
+    const [thinkingOpen, setThinkingOpen] = useState(false);
+    const socratic = mode === 'socratic';
+
+    return (
+      <aside className="w-[360px] shrink-0 border-l border-zinc-900 bg-zinc-950 flex flex-col" aria-label="AI co-pilot">
+        {/* Mode toggle — structural, not a subtle tab. */}
+        <div className="p-2 border-b border-zinc-900">
+          <div role="tablist" aria-label="Tutor mode" className="bg-zinc-900 p-0.5 rounded flex text-center">
+            <button role="tab" aria-selected={!socratic} onClick={() => setMode('direct')}
+              className={`flex-1 py-1.5 text-[11px] font-semibold rounded transition-all duration-200 ${
+                !socratic ? 'bg-zinc-800 text-sky-300 shadow-sm' : 'text-zinc-500 hover:text-zinc-300'
+              }`}>
+              Direct Help
+            </button>
+            <button role="tab" aria-selected={socratic} onClick={() => setMode('socratic')}
+              className={`flex-1 py-1.5 text-[11px] font-semibold rounded transition-all duration-200 ${
+                socratic ? 'bg-zinc-800 text-amber-300 shadow-sm' : 'text-zinc-500 hover:text-zinc-300'
+              }`}>
+              Socratic Mode
+            </button>
+          </div>
+        </div>
+
+        {/* Model selector + context window. */}
+        <div className="px-3 py-1.5 bg-zinc-900/20 border-b border-zinc-900 flex items-center justify-between text-[10px] font-mono text-zinc-400">
+          <label className="flex items-center gap-1.5">
+            <span className="sr-only">Active model</span>
+            <select aria-label="Active local model"
+              className="bg-transparent text-zinc-300 border-0 focus:outline-none cursor-pointer">
+              <option>Gemma 4 E4B (active)</option>
+              <option>Gemma 4 26B A4B (MoE)</option>
+            </select>
+          </label>
+          <span>128K context</span>
+        </div>
+
+        {/* Accent wash reflects the active personality. */}
+        <div className={`flex-1 overflow-y-auto px-4 py-4 space-y-4 transition-colors duration-300 ${socratic ? 'bg-amber-950/[0.04]' : 'bg-sky-950/[0.04]'}`}>
+          <div className="space-y-1">
+            <div className="flex items-center gap-1.5 text-[10px] font-mono font-semibold tracking-wider text-zinc-400 uppercase">
+              <I.User size={10} /> <span>Student</span>
+            </div>
+            <p className="text-[12.5px] text-zinc-300 leading-relaxed">
+              Why is my process getting stuck in the Queued state when I send a terminate signal?
+            </p>
+          </div>
+
+          {/* Tutor thinking-process disclosure. */}
+          <div className="rounded border border-zinc-900 bg-zinc-900/30">
+            <button onClick={() => setThinkingOpen(o => !o)}
+              aria-expanded={thinkingOpen}
+              className="w-full flex items-center justify-between px-2.5 py-1.5 text-[10.5px] font-mono text-zinc-400 hover:text-zinc-200 transition-colors duration-150">
+              <span>Tutor thinking process…</span>
+              <I.Down size={11} className={`transition-transform duration-200 ${thinkingOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {thinkingOpen && (
+              <div className="px-2.5 pb-2.5 pt-0.5 space-y-1 text-[10.5px] font-mono text-zinc-500 leading-relaxed border-t border-zinc-900">
+                <p>· Evaluating query against Psirver async job lifecycle states…</p>
+                <p>· Verifying fork/exec status-tracking logic…</p>
+                <p className={socratic ? 'text-amber-400/80' : 'text-zinc-500'}>
+                  · {socratic ? 'Enforcing Socratic restraint (do not provide the code fix)…' : 'Direct mode: explanation permitted…'}
+                </p>
+              </div>
+            )}
+          </div>
+
+          <div className={`space-y-2 border-l-2 pl-3 ${socratic ? 'border-amber-800/60' : 'border-sky-800/60'}`}>
+            <div className="flex items-center gap-1.5 text-[10px] font-mono font-semibold tracking-wider text-zinc-300 uppercase">
+              <I.Bot size={11} className={socratic ? 'text-amber-400' : 'text-sky-400'} />
+              <span>Whetstone Tutor</span>
+            </div>
+
+            <div className="text-[12.5px] text-zinc-300 leading-relaxed space-y-2">
+              {socratic ? (
+                <>
+                  <p>
+                    Look closely at how your detached thread handles the <code className="font-mono bg-zinc-900 px-1 text-[11.5px] text-zinc-100 rounded">clientSocket</code> file descriptor after the <code className="font-mono bg-zinc-900 px-1 text-[11.5px] text-zinc-100 rounded">fork()</code>. If the parent never closes its pipe reference, what happens to the child's EOF signal?
+                  </p>
+                  <div className="pt-2 flex items-center gap-2">
+                    <button className="h-6 px-2 bg-zinc-900 border border-zinc-800 rounded text-zinc-300 hover:text-zinc-100 hover:border-zinc-700 text-[10.5px] font-medium transition-colors duration-150">Request next hint</button>
+                    <button className="h-6 px-2 bg-zinc-900 border border-zinc-800 rounded text-zinc-400 hover:text-zinc-200 text-[10.5px] font-medium transition-colors duration-150">Reveal answer</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex items-start gap-1.5 mb-1 text-[10px] text-sky-300/90 font-medium">
+                    <I.Alert size={11} className="mt-px shrink-0" />
+                    <span>Integrity note: this is a complete explanation, not a hint.</span>
+                  </div>
+                  <p>
+                    The job hangs in <span className="font-mono text-zinc-100">Queued</span> because the parent process keeps the pipe's write end open after forking, so the child's <span className="font-mono text-zinc-100">EOF</span> never propagates and <span className="font-mono text-zinc-100">poll()</span> never resolves. Close the parent's descriptor immediately after <span className="font-mono text-zinc-100">fork()</span> so the terminate path can observe the closed pipe.
+                  </p>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Composer — border accent shifts with mode. */}
+        <div className="p-3 border-t border-zinc-900 bg-zinc-950">
+          <div className={`flex items-center border bg-zinc-900/60 rounded transition-colors duration-200 px-2 py-1.5 focus-within:border-zinc-600 ${socratic ? 'border-amber-900/50' : 'border-sky-900/50'}`}>
+            <input type="text" aria-label="Ask the tutor a question"
+              placeholder={socratic ? 'Ask, and expect a question back…' : 'Ask the tutor anything…'}
+              className="flex-1 bg-transparent border-0 text-[12px] text-zinc-200 placeholder-zinc-600 focus:outline-none" />
+            <button aria-label="Send message" className="p-1 text-zinc-500 hover:text-zinc-200 transition-colors duration-150">
+              <I.Send size={12} />
+            </button>
+          </div>
+        </div>
+      </aside>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Footer — sandbox status + telemetry + timeline toggle.
+  // ─────────────────────────────────────────────────────────────────────────
+  function Footer({ events, onOpenTimeline }) {
+    const last = events[events.length - 1];
+    return (
+      <footer className="h-7 shrink-0 border-t border-zinc-900 bg-zinc-950 flex items-center justify-between px-3 text-[11px] font-mono text-zinc-500 select-none">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" aria-hidden="true"></span>
+          <span className="text-zinc-300 font-medium font-sans">Sandbox active</span>
+          <span className="text-zinc-800" aria-hidden="true">|</span>
+          <span className="truncate">{last?.k} · {last?.detail}</span>
+        </div>
+        <div className="flex items-center gap-3 shrink-0">
+          <button onClick={onOpenTimeline}
+            className="hover:text-zinc-300 text-[10.5px] transition-colors duration-150 flex items-center gap-1 font-sans font-medium">
+            <I.Clock size={11} /> View full timeline
+          </button>
+          <span className="text-zinc-800" aria-hidden="true">//</span>
+          <span className="text-[10.5px]">OFFLINE · llama.cpp · Whisper · 127.0.0.1:8731</span>
+        </div>
+      </footer>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Timeline drawer — event log, slide-up, dismiss via overlay / Esc / X.
+  // ─────────────────────────────────────────────────────────────────────────
+  function TimelineDrawer({ open, onClose, events }) {
+    useEffect(() => {
+      if (!open) return;
+      const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+      document.addEventListener('keydown', onKey);
+      return () => document.removeEventListener('keydown', onKey);
+    }, [open, onClose]);
+
+    if (!open) return null;
+    return (
+      <div className="absolute inset-0 z-50" role="dialog" aria-modal="true" aria-label="Session timeline">
+        <div className="absolute inset-0 bg-black/50" onClick={onClose}></div>
+        <div className="absolute bottom-0 left-0 right-0 bg-zinc-950 border-t border-zinc-800 drawer-in h-[45%] flex flex-col">
+          <div className="h-9 px-4 border-b border-zinc-900 flex items-center justify-between bg-zinc-900/20">
+            <div className="text-[11px] font-medium text-zinc-200 flex items-center gap-2">
+              <I.Clock size={12} className="text-zinc-500" />
+              <span>Session timeline</span>
+            </div>
+            <button onClick={onClose} aria-label="Close timeline" className="text-zinc-400 hover:text-zinc-200 transition-colors duration-150">
+              <I.X size={13} />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            <table className="w-full text-left border-collapse font-mono text-[12px]">
+              <thead>
+                <tr className="border-b border-zinc-900 text-[10px] text-zinc-500 uppercase tracking-wider">
+                  <th scope="col" className="p-3 w-28 font-semibold">Timestamp</th>
+                  <th scope="col" className="p-3 w-44 font-semibold">Event</th>
+                  <th scope="col" className="p-3 font-semibold">Detail</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-900/60 text-zinc-400">
+                {events.map((e, i) => (
+                  <tr key={i} className="hover:bg-zinc-900/30">
+                    <td className="p-3 text-zinc-500">{e.t}</td>
+                    <td className={`p-3 font-medium ${e.color}`}>{e.k}</td>
+                    <td className="p-3 text-zinc-300">{e.detail}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // App shell — orchestrates the three panes + footer + drawer.
+  // ─────────────────────────────────────────────────────────────────────────
+  function App() {
+    const [mode, setMode] = useState('socratic');
+    const [recording, setRecording] = useState(false);
+    const [timelineOpen, setTimelineOpen] = useState(false);
+
+    const [requirements, setRequirements] = useState([
+      { id: 'FR-SPEC-7', text: 'Function must run in O(n log n) time complexity.', status: 'in_progress' },
+      { id: 'SW-5',      text: 'C++ cells treat each run as a discrete, self-contained program with no cross-cell state.', status: 'done' },
+      { id: 'NFR-SEC-3', text: 'Verify Psirver binds to loopback only (127.0.0.1) and rejects non-local connections.', status: 'not_started' },
+    ]);
+
+    const [events, setEvents] = useState([
+      { t: '00:12:08', k: 'WORKSPACE_INIT', color: 'text-zinc-400',    detail: 'Session opened; environment mapped.' },
+      { t: '00:12:41', k: 'SPEC_EXTRACT',   color: 'text-zinc-300',    detail: '3 requirement items extracted from hw3.pdf via Gemma 4.' },
+      { t: '00:13:55', k: 'CELL_EDIT',      color: 'text-zinc-300',    detail: 'Cell 01 modified.' },
+      { t: '00:14:22', k: 'CELL_RUN',       color: 'text-emerald-400', detail: 'Job #4019 completed, exit 0.' },
+      { t: '00:15:01', k: 'MODE_SWITCH',    color: 'text-amber-400',   detail: 'Tutor switched to Socratic mode.' },
+    ]);
+
+    const injectCellRunLog = useCallback(() => {
+      setEvents(prev => [...prev, {
+        t: '00:15:34', k: 'CELL_RUN', color: 'text-emerald-400',
+        detail: 'Run requested; compiled via clang++ and dispatched to Psirver.'
+      }]);
+    }, []);
+
+    return (
+      <div className="h-full w-full flex flex-col relative select-none">
+        <Header recording={recording} setRecording={setRecording} />
+        {recording && (
+          <div className="shrink-0 h-6 bg-red-950/30 border-b border-red-900/50 flex items-center justify-center gap-2 text-[10.5px] font-medium text-red-300">
+            <span className="w-1.5 h-1.5 rounded-full bg-red-500 pulse-dot"></span>
+            Recording — transcribing on-device via Whisper. Audio never leaves this machine.
+          </div>
+        )}
+        <div className="flex-1 min-h-0 flex">
+          <PaneLeft requirements={requirements} setRequirements={setRequirements} />
+          <PaneCenter onCellRun={injectCellRunLog} />
+          <PaneRight mode={mode} setMode={setMode} />
+        </div>
+        <Footer events={events} onOpenTimeline={() => setTimelineOpen(true)} />
+        <TimelineDrawer open={timelineOpen} onClose={() => setTimelineOpen(false)} events={events} />
+      </div>
+    );
+  }
+
+  ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
