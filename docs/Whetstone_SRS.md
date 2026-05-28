@@ -318,7 +318,7 @@ Each requirement has a unique ID and a priority: **(H)** High / must-have for v1
 - **DATA-4:** A **Spec** entity shall store: identifier, source type, and raw text.
 - **DATA-5:** An **Event** entity (for the timeline) shall store: identifier, timestamp, type, and a payload describing the change.
 - **DATA-6:** All entities shall be serializable to a local, portable format to support export and (optionally) DAG-based versioning.
-- **DATA-7:** Entities shall be persisted in a local **SQLite** database via **SQLModel**. The **Event** log is the canonical, append-only record (event sourcing); Session and Cell state is derived from it rather than stored as a parallel mutable copy. The database shall run in WAL mode to support the autosave/crash-resilience requirement (NFR-REL-1), and full-text/semantic search (FR-MGT-3) shall be served by SQLite FTS5 and/or sqlite-vec.
+- **DATA-7:** Entities shall be persisted in a local **SQLite** database via **SQLModel**. In v1, **Session** and **Cell** hold their own mutable state (content, last output, status, etc.); this mutable state is intentional and authoritative. The **Event** log is an **append-only audit/timeline record** used for replay and summary — **not** the canonical source of truth, and v1 does **not** derive Session/Cell state from events. (A fuller event-sourced model where state is derived from the log is a deliberate post-v1 goal, not a v1 requirement.) The database shall run in WAL mode to support the autosave/crash-resilience requirement (NFR-REL-1), and full-text/semantic search (FR-MGT-3) shall be served by SQLite FTS5 and/or sqlite-vec.
 
 ### 6.2 Entity-Relationship Diagram
 
@@ -632,6 +632,7 @@ Most v1.0 design questions are now resolved (C++ toolchain assumed from the syst
 - **Is Gemma 4 E4B's complexity analysis reliable enough** on the kinds of code students actually write, or should the UI lean harder on the "verify this" framing and recommend the 26B model for that feature specifically?
 - **Can the Socratic system prompt hold the model's restraint** across a multi-turn hint chain on a 4B model, and how should the "give up / reveal" escalation (FR-SOC-4) be tuned?
 - **What is the right v1.0 security floor for Psirver** when running AI-generated (not just user-written) code — which resource limits are worth adding before release versus deferring to hardening?
+- **Event ordering currently relies on timestamp only** — same-millisecond events have undefined relative order. A monotonic sequence column would fix this before the timeline gets heavy write traffic (cell edits can fire fast).
 
 ---
 

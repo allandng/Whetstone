@@ -25,6 +25,7 @@ from sqlmodel import Session as DBSession
 from sqlmodel import select
 
 from db import get_session, session_scope
+from events import emit_event
 from models import Cell, Event, RequirementItem, Session as SessionModel
 from services.llm_client import LLMClient, LLMUnavailableError
 
@@ -311,24 +312,22 @@ def _record_exchange(
 ) -> None:
     """Append the exchange to the event log (FR-SESS-1)."""
 
-    payload = json.dumps(
-        {
-            "kind": kind,
-            "mode": mode,
-            "question": question,
-            "response": response,
-            "cell_id": str(cell_id) if cell_id else None,
-        }
-    )
+    payload = {
+        "kind": kind,
+        "mode": mode,
+        "question": question,
+        "response": response,
+        "cell_id": str(cell_id) if cell_id else None,
+    }
+    # A fresh session (not the request's): for the streaming /ask endpoint
+    # this runs after the response body has already been sent.
     with session_scope() as db:
-        db.add(
-            Event(
-                session_id=session_id,
-                event_type=_AI_EVENT_TYPE,
-                payload=payload,
-            )
+        emit_event(
+            db,
+            session_id=session_id,
+            event_type=_AI_EVENT_TYPE,
+            payload=payload,
         )
-        db.commit()
 
 
 def _truncate(text: str, limit: int) -> str:
