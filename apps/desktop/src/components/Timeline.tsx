@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import type { SessionTimeline, TimelineEvent } from "../api";
 import { fetchTimeline } from "../api";
-import "./Timeline.css";
 
 type Props = {
   sessionId: string;
@@ -15,17 +14,27 @@ const EVENT_LABELS: Record<string, string> = {
   voice_note: "VOICE NOTE",
 };
 
+// Accent per event type, mirroring the workspace palette (emerald = run/done,
+// sky = AI, amber = mode, zinc = neutral).
+const EVENT_TONE: Record<string, string> = {
+  cell_run: "text-zinc-300",
+  cell_result: "text-emerald-400",
+  ai_exchange: "text-sky-400",
+  mode_switch: "text-amber-400",
+  voice_note: "text-zinc-300",
+};
+
 function eventLabel(type: string): string {
   return EVENT_LABELS[type] ?? type.replace(/_/g, " ").toUpperCase();
 }
 
-function eventClass(type: string): string {
-  return `badge badge--${type.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`;
+function eventTone(type: string): string {
+  return EVENT_TONE[type] ?? "text-zinc-400";
 }
 
 function formatTimestamp(ts: string): string {
   const date = new Date(ts);
-  return Number.isNaN(date.getTime()) ? ts : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? ts : date.toLocaleTimeString();
 }
 
 function truncate(value: string, max = 140): string {
@@ -74,22 +83,6 @@ function summarize(event: TimelineEvent): string {
   }
 }
 
-function EventCard({ event }: { event: TimelineEvent }) {
-  return (
-    <div className="event-card">
-      <div className="event-card__head">
-        <span className={eventClass(event.event_type)}>
-          {eventLabel(event.event_type)}
-        </span>
-        <time className="event-card__time">
-          {formatTimestamp(event.timestamp)}
-        </time>
-      </div>
-      <p className="event-card__summary">{summarize(event)}</p>
-    </div>
-  );
-}
-
 export function Timeline({ sessionId }: Props) {
   const [timeline, setTimeline] = useState<SessionTimeline | null>(null);
   const [loading, setLoading] = useState(false);
@@ -127,22 +120,18 @@ export function Timeline({ sessionId }: Props) {
   }, [sessionId]);
 
   if (!sessionId) {
-    return (
-      <p className="timeline__hint">
-        Enter a session ID above to load its timeline.
-      </p>
-    );
+    return <p className="p-4 text-[12px] text-zinc-500">Enter a session ID above to load its timeline.</p>;
   }
   if (loading) {
-    return <p className="timeline__hint">Loading timeline…</p>;
+    return <p className="p-4 text-[12px] text-zinc-500">Loading timeline…</p>;
   }
   if (error) {
-    return <p className="timeline__error">Could not load timeline: {error}</p>;
+    return <p className="p-4 text-[12px] text-red-400">Could not load timeline: {error}</p>;
   }
 
   const events = timeline?.events ?? [];
   if (events.length === 0) {
-    return <p className="timeline__hint">No events recorded yet.</p>;
+    return <p className="p-4 text-[12px] text-zinc-500">No events recorded yet.</p>;
   }
 
   const groups = timeline?.groups ?? {};
@@ -150,18 +139,21 @@ export function Timeline({ sessionId }: Props) {
   const current = events[safeCursor];
 
   return (
-    <div className="timeline">
-      <div className="timeline__toolbar">
-        <div className="timeline__counts">
+    <div className="flex flex-col h-full">
+      <div className="flex items-center justify-between gap-3 px-4 py-2 border-b border-zinc-900">
+        <div className="flex flex-wrap items-center gap-2 font-mono text-[10px] uppercase tracking-wider">
           {Object.entries(groups).map(([type, items]) => (
-            <span key={type} className={eventClass(type)}>
+            <span
+              key={type}
+              className={`px-1.5 py-0.5 rounded border border-zinc-800 bg-zinc-900/60 font-semibold ${eventTone(type)}`}
+            >
               {eventLabel(type)} · {items.length}
             </span>
           ))}
         </div>
         <button
           type="button"
-          className="timeline__replay-toggle"
+          className="shrink-0 h-6 px-2 rounded bg-zinc-900 border border-zinc-800 text-[10.5px] font-medium text-zinc-300 hover:text-zinc-100 hover:border-zinc-700 transition-colors duration-150"
           onClick={() => {
             setReplay((on) => !on);
             setCursor(0);
@@ -172,39 +164,72 @@ export function Timeline({ sessionId }: Props) {
       </div>
 
       {replay ? (
-        <div className="timeline__replay">
-          <div className="timeline__replay-controls">
+        <div className="p-4 space-y-3">
+          <div className="flex items-center justify-between gap-3 font-mono text-[11px] text-zinc-400">
             <button
               type="button"
+              className="h-6 px-2 rounded bg-zinc-900 border border-zinc-800 text-zinc-300 hover:text-zinc-100 disabled:opacity-40"
               onClick={() => setCursor((c) => Math.max(0, c - 1))}
               disabled={safeCursor === 0}
             >
               ‹ Prev
             </button>
-            <span className="timeline__replay-position">
+            <span>
               Step {safeCursor + 1} of {events.length}
             </span>
             <button
               type="button"
-              onClick={() =>
-                setCursor((c) => Math.min(events.length - 1, c + 1))
-              }
+              className="h-6 px-2 rounded bg-zinc-900 border border-zinc-800 text-zinc-300 hover:text-zinc-100 disabled:opacity-40"
+              onClick={() => setCursor((c) => Math.min(events.length - 1, c + 1))}
               disabled={safeCursor === events.length - 1}
             >
               Next ›
             </button>
           </div>
-          <EventCard event={current} />
+          <EventRow event={current} />
         </div>
       ) : (
-        <ol className="timeline__list">
-          {events.map((event) => (
-            <li key={event.id}>
-              <EventCard event={event} />
-            </li>
-          ))}
-        </ol>
+        <table className="w-full text-left border-collapse font-mono text-[12px]">
+          <thead>
+            <tr className="border-b border-zinc-900 text-[10px] text-zinc-500 uppercase tracking-wider">
+              <th scope="col" className="p-3 w-24 font-semibold">
+                Time
+              </th>
+              <th scope="col" className="p-3 w-40 font-semibold">
+                Event
+              </th>
+              <th scope="col" className="p-3 font-semibold">
+                Detail
+              </th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-zinc-900/60 text-zinc-400">
+            {events.map((event) => (
+              <tr key={event.id} className="hover:bg-zinc-900/30">
+                <td className="p-3 text-zinc-500 align-top">{formatTimestamp(event.timestamp)}</td>
+                <td className={`p-3 font-medium align-top ${eventTone(event.event_type)}`}>
+                  {eventLabel(event.event_type)}
+                </td>
+                <td className="p-3 text-zinc-300 align-top">{summarize(event)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
+    </div>
+  );
+}
+
+function EventRow({ event }: { event: TimelineEvent }) {
+  return (
+    <div className="rounded border border-zinc-800 bg-zinc-900/40 p-3">
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <span className={`font-mono text-[10px] uppercase tracking-wider font-semibold ${eventTone(event.event_type)}`}>
+          {eventLabel(event.event_type)}
+        </span>
+        <time className="font-mono text-[10px] text-zinc-500">{formatTimestamp(event.timestamp)}</time>
+      </div>
+      <p className="text-[12px] text-zinc-300 leading-relaxed">{summarize(event)}</p>
     </div>
   );
 }

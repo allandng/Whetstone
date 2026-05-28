@@ -1,0 +1,151 @@
+@import "tailwindcss";
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Whetstone design tokens — ported from the hi-fi prototype
+   (apps/desktop/design/Whetstone.reference.html). These are the canonical
+   semantic tokens for the workspace; utility classes (zinc/emerald/amber/sky)
+   come from Tailwind's default palette, matching the prototype 1:1.
+   ────────────────────────────────────────────────────────────────────────── */
+:root {
+  --bg-base: #09090b; /* app shell                 */
+  --bg-panel: #0a0a0b; /* side panels / chrome      */
+  --bg-canvas: #0c0c0e; /* center notebook canvas    */
+  --bg-elevated: #18181b; /* hover / raised surfaces   */
+  --bg-inset: #000000; /* terminal frame            */
+
+  --border-hair: #18181b; /* zinc-900 — hairline       */
+  --border-soft: #27272a; /* zinc-800 — control border */
+
+  --fg-strong: #fafafa; /* primary text              */
+  --fg: #d4d4d8; /* body text                 */
+  --fg-muted: #a1a1aa; /* labels                    */
+  --fg-faint: #71717a; /* secondary labels          */
+  --fg-dim: #52525b; /* decorative / line numbers */
+
+  --accent-run: #10b981; /* emerald — execute / done  */
+  --accent-run-2: #34d399;
+  --accent-warn: #f59e0b; /* amber — in progress       */
+  --accent-warn-2: #fbbf24;
+  --accent-stop: #ef4444; /* red — recording / danger  */
+  --accent-stop-2: #f87171;
+
+  --ring: #a1a1aa; /* focus ring — monochrome but VISIBLE */
+}
+
+/* Map the prototype's fonts onto Tailwind's font-sans / font-mono utilities so
+   `font-mono` / `font-sans` resolve to JetBrains Mono / Inter (FR visual). */
+@theme {
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+code,
+pre,
+kbd,
+.font-mono {
+  font-feature-settings:
+    "calt" 0,
+    "ss01" 1;
+}
+
+/* The dark workspace surface is scoped to its own root so the legacy
+   Home/Timeline views keep their original (light) styling untouched. */
+.workspace-root {
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-base);
+  color: var(--fg-strong);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-soft);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+.pulse-dot {
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+
+@keyframes wave {
+  0%,
+  100% {
+    transform: scaleY(0.3);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+.wbar {
+  transform-origin: bottom;
+  animation: wave 1s ease-in-out infinite;
+}
+
+@keyframes slideup {
+  from {
+    transform: translateY(12px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+.drawer-in {
+  animation: slideup 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Visible, on-brand focus ring (kept monochrome but clearly visible against
+   the zinc chrome). */
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+button,
+[role="button"],
+a,
+select {
+  cursor: pointer;
+}
+input[type="text"] {
+  cursor: text;
+}
+
+/* Honour reduced-motion: kill looping/decorative animations and collapse
+   transitions to near-instant. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

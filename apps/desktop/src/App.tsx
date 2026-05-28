@@ -2,9 +2,10 @@ import { useState } from "react";
 import reactLogo from "./assets/react.svg";
 import { invoke } from "@tauri-apps/api/core";
 import Timeline from "./components/Timeline";
+import { WorkspaceLayout } from "./workspace/WorkspaceLayout";
 import "./App.css";
 
-type View = "home" | "timeline";
+type View = "workspace" | "home" | "timeline";
 
 function HomeView() {
   const [greetMsg, setGreetMsg] = useState("");
@@ -78,12 +79,25 @@ function TimelineView() {
 }
 
 function App() {
-  const [view, setView] = useState<View>("home");
+  const [view, setView] = useState<View>("workspace");
+
+  // The workspace owns the full window (its own dark theme + chrome); the
+  // legacy Home/Timeline views keep the sidebar shell.
+  if (view === "workspace") {
+    return <WorkspaceLayout onNavigateHome={() => setView("home")} />;
+  }
 
   return (
     <div className="app-shell">
       <nav className="sidebar">
         <span className="sidebar__brand">Whetstone</span>
+        <button
+          type="button"
+          className="sidebar__link"
+          onClick={() => setView("workspace")}
+        >
+          Workspace
+        </button>
         <button
           type="button"
           className={view === "home" ? "sidebar__link is-active" : "sidebar__link"}

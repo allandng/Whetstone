@@ -1,35 +1,229 @@
-// Minimal client for the Whetstone backend. The backend runs on loopback
+// Typed client for the Whetstone backend. The backend runs on loopback
 // (see apps/backend/config.py); override with VITE_API_BASE if needed.
+//
+// Every shape here mirrors apps/backend/schemas.py — the backend is the source
+// of truth. Routes that don't exist yet are marked with a TODO and the calling
+// UI falls back to local state so the app stays usable offline.
+
+import type {
+  AskRequest,
+  AttachSpecRequest,
+  CellCreate,
+  CellRead,
+  CellUpdate,
+  ComplexityResponse,
+  ExplainErrorResponse,
+  RequirementItemRead,
+  RequirementUpdate,
+  SessionCreate,
+  SessionRead,
+  SessionTimeline,
+  SpecImportResponse,
+} from "./types";
+
+export type * from "./types";
 
 export const API_BASE =
   (import.meta.env.VITE_API_BASE as string | undefined) ??
   "http://127.0.0.1:8000";
 
-export type TimelineEvent = {
-  id: string;
-  session_id: string;
-  timestamp: string;
-  event_type: string;
-  payload: Record<string, unknown>;
-};
+const enc = encodeURIComponent;
 
-export type SessionTimeline = {
-  session_id: string;
-  events: TimelineEvent[];
-  groups: Record<string, TimelineEvent[]>;
-};
+/** Error carrying the HTTP status, so callers can branch (e.g. 501, 404). */
+export type ApiError = Error & { status?: number };
 
-export async function fetchTimeline(
-  sessionId: string,
-): Promise<SessionTimeline> {
-  const res = await fetch(
-    `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/timeline`,
-  );
+async function json<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  signal?: AbortSignal,
+): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method,
+    headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal,
+  });
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
-    throw new Error(
-      `Timeline request failed (${res.status})${detail ? `: ${detail}` : ""}`,
-    );
+    throw Object.assign(
+      new Error(`${method} ${path} failed (${res.status})${detail ? `: ${detail}` : ""}`),
+      { status: res.status },
+    ) as ApiError;
   }
-  return (await res.json()) as SessionTimeline;
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
+}
+
+// --- Sessions --------------------------------------------------------------
+
+export function listSessions(): Promise<SessionRead[]> {
+  return json<SessionRead[]>("GET", "/sessions");
+}
+
+export function createSession(body: SessionCreate = {}): Promise<SessionRead> {
+  return json<SessionRead>("POST", "/sessions", body);
+}
+
+export function getSession(sessionId: string): Promise<SessionRead> {
+  return json<SessionRead>("GET", `/sessions/${enc(sessionId)}`);
+}
+
+export function deleteSession(sessionId: string): Promise<{ status: string }> {
+  return json("DELETE", `/sessions/${enc(sessionId)}`);
+}
+
+export function attachSpec(sessionId: string, specId: string): Promise<SessionRead> {
+  const body: AttachSpecRequest = { spec_id: specId };
+  return json<SessionRead>("POST", `/sessions/${enc(sessionId)}/spec`, body);
+}
+
+export function fetchTimeline(sessionId: string): Promise<SessionTimeline> {
+  return json<SessionTimeline>("GET", `/sessions/${enc(sessionId)}/timeline`);
+}
+
+// --- Cells -----------------------------------------------------------------
+
+// TODO(backlog): the backend has no GET /sessions/{id}/cells (or GET /cells)
+// route yet, so a session's existing cells cannot be re-fetched. The notebook
+// seeds a starter cell and keeps cells in local React state instead. Adding
+// that route would let a session picker restore prior cells (see plan answer 3).
+export function listSessionCells(_sessionId: string): Promise<CellRead[]> {
+  return Promise.reject(
+    Object.assign(new Error("listSessionCells: no backend route yet (backlog)"), {
+      status: 501,
+    }) as ApiError,
+  );
+}
+
+export function createCell(body: CellCreate): Promise<CellRead> {
+  return json<CellRead>("POST", "/cells", body);
+}
+
+export function updateCell(cellId: string, body: CellUpdate): Promise<CellRead> {
+  return json<CellRead>("PUT", `/cells/${enc(cellId)}`, body);
+}
+
+/** Run a code cell. The backend submits to Psirver and polls to completion
+ *  server-side, returning the terminal CellRead (status + last_output). There
+ *  is no incremental stdout stream and no terminate route, so `signal` only
+ *  aborts the client request — the server job continues to completion. */
+export function runCell(cellId: string, signal?: AbortSignal): Promise<CellRead> {
+  return json<CellRead>("POST", `/cells/${enc(cellId)}/run`, undefined, signal);
+}
+
+export function deleteCell(cellId: string): Promise<{ status: string }> {
+  return json("DELETE", `/cells/${enc(cellId)}`);
+}
+
+// --- Spec / requirements ---------------------------------------------------
+
+export function listRequirements(specId: string): Promise<RequirementItemRead[]> {
+  return json<RequirementItemRead[]>("GET", `/specs/${enc(specId)}/requirements`);
+}
+
+export function updateRequirement(
+  requirementId: string,
+  body: RequirementUpdate,
+): Promise<RequirementItemRead> {
+  return json<RequirementItemRead>("PATCH", `/requirements/${enc(requirementId)}`, body);
+}
+
+export function importSpec(input: {
+  file?: File;
+  rawText?: string;
+}): Promise<SpecImportResponse> {
+  const form = new FormData();
+  if (input.file) form.append("file", input.file);
+  else if (input.rawText != null) form.append("raw_text", input.rawText);
+  return fetch(`${API_BASE}/specs/import`, { method: "POST", body: form }).then(
+    async (res) => {
+      if (!res.ok) {
+        const detail = await res.text().catch(() => "");
+        throw Object.assign(
+          new Error(`POST /specs/import failed (${res.status})${detail ? `: ${detail}` : ""}`),
+          { status: res.status },
+        ) as ApiError;
+      }
+      return (await res.json()) as SpecImportResponse;
+    },
+  );
+}
+
+// --- AI co-pilot -----------------------------------------------------------
+
+export type AskStreamHandlers = {
+  onDelta: (text: string) => void;
+  onDone?: () => void;
+  onError?: (message: string) => void;
+};
+
+/** Stream a Direct-mode answer from POST /ai/ask (Server-Sent Events).
+ *  Socratic mode is not implemented server-side (returns 501) — the UI does
+ *  not call this in Socratic mode. Throws an ApiError on a non-OK response;
+ *  network failures (backend down) reject so callers can degrade gracefully. */
+export async function askStream(
+  body: AskRequest,
+  handlers: AskStreamHandlers,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/ai/ask`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    const detail = await res.text().catch(() => "");
+    throw Object.assign(
+      new Error(`POST /ai/ask failed (${res.status})${detail ? `: ${detail}` : ""}`),
+      { status: res.status },
+    ) as ApiError;
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, nl).trim();
+      buffer = buffer.slice(nl + 1);
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).trim();
+      if (!data) continue;
+      let obj: { delta?: string; error?: string; done?: boolean };
+      try {
+        obj = JSON.parse(data);
+      } catch {
+        continue;
+      }
+      if (typeof obj.delta === "string") handlers.onDelta(obj.delta);
+      else if (typeof obj.error === "string") {
+        handlers.onError?.(obj.error);
+        return;
+      } else if (obj.done) {
+        handlers.onDone?.();
+        return;
+      }
+    }
+  }
+  handlers.onDone?.();
+}
+
+export function explainError(
+  cellId: string,
+  errorText: string,
+): Promise<ExplainErrorResponse> {
+  return json<ExplainErrorResponse>("POST", "/ai/explain-error", {
+    cell_id: cellId,
+    error_text: errorText,
+  });
+}
+
+export function complexity(cellId: string): Promise<ComplexityResponse> {
+  return json<ComplexityResponse>("POST", "/ai/complexity", { cell_id: cellId });
 }
