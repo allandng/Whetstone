@@ -17,7 +17,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import get_settings
-from db import init_db
+from db import create_db_and_tables
 from routers import ai, cells, sessions, spec
 
 
@@ -25,7 +25,7 @@ from routers import ai, cells, sessions, spec
 async def lifespan(app: FastAPI):
     """Initialize resources on startup; tear down on shutdown."""
 
-    init_db()
+    create_db_and_tables()
     yield
 
 
