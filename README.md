@@ -34,10 +34,10 @@ In active development. The requirements are specified (see [`docs/Whetstone_SRS.
 |---|---|
 | Software Requirements Spec | Done |
 | Psirver job system (async exec) | In progress |
-| Notebook + cell execution | Planned |
-| Local LLM co-pilot | Planned |
-| Spec parsing + tracking | Planned |
-| Session timeline + replay | Planned |
+| Notebook + cell execution | In progress |
+| Local LLM co-pilot | In progress |
+| Spec parsing + tracking | In progress |
+| Session timeline + replay | In progress |
 | Socratic mode, voice input | Planned |
 
 ## Architecture

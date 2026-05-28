@@ -1,39 +1,183 @@
 """Routes for assignment specs and requirement tracking.
 
-Stub endpoints for importing a :class:`models.Spec` and managing the
-:class:`models.RequirementItem` checklist parsed from it.
+Importing a :class:`models.Spec` (PDF or text) and managing the
+:class:`models.RequirementItem` checklist parsed from it (SRS §4.1):
+
+- ``POST /specs/import``             - store a spec, kick off extraction.
+- ``GET  /specs/{id}/requirements``  - list the parsed checklist.
+- ``PATCH /requirements/{id}``       - manual edit of one checklist item.
+
+Extraction runs as a FastAPI ``BackgroundTask`` so ``/specs/import`` returns
+immediately with ``status="extracting"``; the checklist appears once the LLM
+reply has been parsed and written.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+import logging
+import uuid
+
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    UploadFile,
+)
 from sqlmodel import Session as DBSession
+from sqlmodel import select
 
-from db import get_session
+from db import get_session, session_scope
+from models import RequirementItem, RequirementStatus, SourceType, Spec
+from schemas import RequirementItemRead, RequirementUpdate, SpecImportResponse
+from services.llm_client import LLMClient, LLMUnavailableError
+from services.spec_parser import (
+    build_extraction_messages,
+    extract_pdf_text,
+    parse_requirements,
+)
 
-router = APIRouter(prefix="/spec", tags=["spec"])
+logger = logging.getLogger(__name__)
+
+router = APIRouter(tags=["spec"])
+
+llm_client = LLMClient()
 
 
-@router.post("/import")
-async def import_spec(db: DBSession = Depends(get_session)) -> dict:
-    """Import a spec (PDF/text) and parse requirements. Stub."""
+@router.post("/specs/import", response_model=SpecImportResponse)
+async def import_spec(
+    background_tasks: BackgroundTasks,
+    file: UploadFile | None = File(default=None),
+    raw_text: str | None = Form(default=None),
+    db: DBSession = Depends(get_session),
+) -> SpecImportResponse:
+    """Import a spec (PDF/text) and extract requirements in the background."""
 
-    return {}
+    source_type, text = await _resolve_source(file, raw_text)
+
+    spec = Spec(source_type=source_type, raw_text=text)
+    db.add(spec)
+    db.commit()
+    db.refresh(spec)
+
+    background_tasks.add_task(_extract_requirements, spec.id)
+    return SpecImportResponse(spec_id=spec.id, status="extracting")
 
 
-@router.get("/{spec_id}/requirements")
+@router.get("/specs/{spec_id}/requirements", response_model=list[RequirementItemRead])
 async def list_requirements(
-    spec_id: int, db: DBSession = Depends(get_session)
-) -> list[dict]:
-    """List tracked requirement items for a spec. Stub."""
+    spec_id: uuid.UUID, db: DBSession = Depends(get_session)
+) -> list[RequirementItem]:
+    """List the requirement items extracted from a spec."""
 
-    return []
+    if db.get(Spec, spec_id) is None:
+        raise HTTPException(status_code=404, detail="Spec not found.")
+    return list(
+        db.exec(
+            select(RequirementItem).where(RequirementItem.spec_id == spec_id)
+        ).all()
+    )
 
 
-@router.put("/requirements/{item_id}")
+@router.patch("/requirements/{requirement_id}", response_model=RequirementItemRead)
 async def update_requirement(
-    item_id: int, db: DBSession = Depends(get_session)
-) -> dict:
-    """Toggle or edit a requirement item. Stub."""
+    requirement_id: uuid.UUID,
+    body: RequirementUpdate,
+    db: DBSession = Depends(get_session),
+) -> RequirementItem:
+    """Update a requirement item's status and/or text (manual edit)."""
 
-    return {}
+    item = db.get(RequirementItem, requirement_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Requirement not found.")
+
+    if body.status is not None:
+        item.status = body.status
+    if body.text is not None:
+        item.text = body.text
+
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+# --- Helpers ---------------------------------------------------------------
+
+
+async def _resolve_source(
+    file: UploadFile | None, raw_text: str | None
+) -> tuple[SourceType, str]:
+    """Resolve the request into a ``(source_type, raw_text)`` pair.
+
+    A file takes precedence over ``raw_text``; PDFs are detected by extension
+    or content type and run through ``pdfplumber``, anything else is decoded as
+    UTF-8 text. Raises 400 if neither a file nor non-empty text is supplied.
+    """
+
+    if file is not None:
+        data = await file.read()
+        name = (file.filename or "").lower()
+        content_type = (file.content_type or "").lower()
+        if name.endswith(".pdf") or "pdf" in content_type:
+            return SourceType.pdf, extract_pdf_text(data)
+        return SourceType.text, data.decode("utf-8", errors="replace")
+
+    if raw_text is not None and raw_text.strip():
+        return SourceType.text, raw_text
+
+    raise HTTPException(
+        status_code=400, detail="Provide a file or non-empty raw_text."
+    )
+
+
+async def _extract_requirements(spec_id: uuid.UUID) -> None:
+    """Background task: ask the LLM for requirements and persist them.
+
+    Runs after the ``/specs/import`` response is sent, so it uses its own
+    session scope and surfaces failures via the log rather than to the client.
+    A dead llama-server leaves the spec with an empty checklist rather than
+    raising into the background runner.
+    """
+
+    with session_scope() as db:
+        spec = db.get(Spec, spec_id)
+        if spec is None:
+            logger.warning("Spec %s vanished before extraction.", spec_id)
+            return
+        raw_text = spec.raw_text
+
+    if not raw_text.strip():
+        logger.warning("Spec %s has no text to extract from.", spec_id)
+        return
+
+    messages = build_extraction_messages(raw_text)
+    try:
+        chunks = [
+            chunk
+            async for chunk in llm_client.ask(
+                messages, stream=False, thinking=False
+            )
+        ]
+    except LLMUnavailableError as exc:
+        logger.error("Requirement extraction failed for spec %s: %s", spec_id, exc)
+        return
+
+    requirements = parse_requirements("".join(chunks))
+    if not requirements:
+        logger.warning("No requirements parsed for spec %s.", spec_id)
+        return
+
+    with session_scope() as db:
+        for text in requirements:
+            db.add(
+                RequirementItem(
+                    spec_id=spec_id,
+                    text=text,
+                    status=RequirementStatus.not_started,
+                )
+            )
+        db.commit()
+    logger.info("Extracted %d requirements for spec %s.", len(requirements), spec_id)
