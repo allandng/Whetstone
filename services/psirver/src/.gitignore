@@ -1,0 +1,7 @@
+# Build artifacts
+*.o
+DEPEND
+psirver
+
+# Runtime working directory (pid file, scripts/, jobs/)
+run/
