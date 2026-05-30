@@ -16,9 +16,10 @@ from sqlmodel import select
 
 from db import get_session
 from events import list_session_events
-from models import Event, Session as SessionModel, Spec
+from models import Cell, Event, Session as SessionModel, Spec
 from schemas import (
     AttachSpecRequest,
+    CellRead,
     SessionCreate,
     SessionRead,
     SessionTimeline,
@@ -67,6 +68,30 @@ async def get_session_detail(
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found.")
     return session
+
+
+@router.get("/{session_id}/cells", response_model=list[CellRead])
+async def list_session_cells(
+    session_id: uuid.UUID, db: DBSession = Depends(get_session)
+) -> list[Cell]:
+    """Return a session's cells in stable order, each with its last output.
+
+    Ordered by ``order_index`` (then ``id`` to break ties deterministically) so
+    reopening a session restores its cells in the same order they were laid out.
+    Each :class:`CellRead` carries ``last_output``/``status`` from the most
+    recent run, so the notebook can render prior results without re-running.
+    """
+
+    if db.get(SessionModel, session_id) is None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    return list(
+        db.exec(
+            select(Cell)
+            .where(Cell.session_id == session_id)
+            .order_by(Cell.order_index, Cell.id)
+        ).all()
+    )
 
 
 @router.delete("/{session_id}")
