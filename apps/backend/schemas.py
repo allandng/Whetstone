@@ -150,9 +150,13 @@ class SessionTimeline(BaseModel):
 
     ``events`` is the flat list ordered by timestamp (what the UI renders and
     replays); ``groups`` buckets the same events by ``event_type`` (CELL_RUN,
-    CELL_RESULT, AI_EXCHANGE, MODE_SWITCH, VOICE_NOTE, ...).
+    CELL_RESULT, AI_EXCHANGE, MODE_SWITCH, VOICE_NOTE, REQUIREMENT_STATUS, ...).
+    ``requirements`` is the session's current requirement checklist (empty if no
+    spec is attached); replay pairs it with ``requirement_status`` events to show
+    each item's check-off state at a past point.
     """
 
     session_id: uuid.UUID
     events: list[TimelineEvent]
     groups: dict[str, list[TimelineEvent]]
+    requirements: list[RequirementItemRead]

@@ -491,6 +491,96 @@ def test_timeline_chronological_grouped_decoded(client, monkeypatch):
     assert timeline["groups"]["ai_exchange"][0]["payload"]["kind"] == "explain_error"
 
 
+def _session_with_spec(client, monkeypatch, requirements):
+    """Create a session, import a spec with the given requirement texts, and
+    attach it. Returns ``(session_id, requirement_items)``."""
+
+    monkeypatch.setattr(
+        spec_router.llm_client, "ask", _ask_yielding(json.dumps(requirements))
+    )
+    session_id = _new_session(client)
+    spec_id = client.post(
+        "/specs/import", data={"raw_text": "spec"}
+    ).json()["spec_id"]
+    attached = client.post(f"/sessions/{session_id}/spec", json={"spec_id": spec_id})
+    assert attached.status_code == 200, attached.text
+    items = client.get(f"/specs/{spec_id}/requirements").json()
+    return session_id, items
+
+
+def test_timeline_includes_session_requirements(client, monkeypatch):
+    """The timeline carries the session's current checklist so replay can show
+    requirement check-offs without a second spec lookup from the frontend."""
+
+    session_id, items = _session_with_spec(
+        client, monkeypatch, ["Read input", "Sort values"]
+    )
+
+    timeline = client.get(f"/sessions/{session_id}/timeline").json()
+    assert [r["text"] for r in timeline["requirements"]] == ["Read input", "Sort values"]
+    assert all(r["status"] == "not_started" for r in timeline["requirements"])
+    # IDs match the spec's requirement items so replay can key off them.
+    assert {r["id"] for r in timeline["requirements"]} == {i["id"] for i in items}
+
+
+def test_timeline_requirements_empty_without_spec(client):
+    """A session with no attached spec reports an empty checklist (not null)."""
+
+    session_id = _new_session(client)
+    timeline = client.get(f"/sessions/{session_id}/timeline").json()
+    assert timeline["requirements"] == []
+
+
+def test_patch_requirement_status_emits_timeline_event(client, monkeypatch):
+    """Checking off a requirement records a ``requirement_status`` event on the
+    timeline, carrying the from/to transition so replay can reconstruct it."""
+
+    session_id, items = _session_with_spec(client, monkeypatch, ["Read input"])
+    req = items[0]
+
+    patched = client.patch(f"/requirements/{req['id']}", json={"status": "done"})
+    assert patched.status_code == 200, patched.text
+
+    timeline = client.get(f"/sessions/{session_id}/timeline").json()
+    assert "requirement_status" in timeline["groups"]
+    payload = timeline["groups"]["requirement_status"][0]["payload"]
+    assert payload["requirement_id"] == req["id"]
+    assert payload["from"] == "not_started"
+    assert payload["to"] == "done"
+    assert payload["text"] == "Read input"
+
+
+def test_patch_requirement_text_only_emits_no_status_event(client, monkeypatch):
+    """A text-only edit (no status change) leaves the timeline untouched: only
+    check-offs are recorded, so replay's requirement view stays meaningful."""
+
+    session_id, items = _session_with_spec(client, monkeypatch, ["Read input"])
+    req = items[0]
+
+    patched = client.patch(f"/requirements/{req['id']}", json={"text": "Rewritten"})
+    assert patched.status_code == 200, patched.text
+
+    timeline = client.get(f"/sessions/{session_id}/timeline").json()
+    assert "requirement_status" not in timeline["groups"]
+
+
+def test_patch_requirement_status_unchanged_emits_no_event(client, monkeypatch):
+    """Re-asserting the current status is a no-op for the timeline (no event),
+    so replay doesn't show a check-off that never happened."""
+
+    session_id, items = _session_with_spec(client, monkeypatch, ["Read input"])
+    req = items[0]
+
+    # The item starts not_started; patching it to not_started changes nothing.
+    patched = client.patch(
+        f"/requirements/{req['id']}", json={"status": "not_started"}
+    )
+    assert patched.status_code == 200, patched.text
+
+    timeline = client.get(f"/sessions/{session_id}/timeline").json()
+    assert "requirement_status" not in timeline["groups"]
+
+
 # === Spec import & requirement extraction ===================================
 
 
