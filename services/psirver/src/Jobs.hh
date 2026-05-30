@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -30,6 +31,14 @@ struct Job {
   std::string stderr_path;
   std::optional<int> exit_code;
   bool termination_requested = false;
+  // When the child flipped to RUNNING, used for the wall-clock deadline.
+  std::chrono::steady_clock::time_point started_at{};
+  // When a SIGTERM was first sent (by a terminate request or the wall-clock
+  // deadline); drives the SIGTERM -> SIGKILL escalation.
+  std::optional<std::chrono::steady_clock::time_point> sigterm_at;
+  // True when termination was triggered by the wall-clock cap rather than an
+  // explicit terminate request.
+  bool timed_out = false;
 };
 
 class JobManager {
@@ -60,6 +69,9 @@ private:
   void reaper_loop();
   // Compute a job's terminal state from a wait() status. Caller holds mu_.
   void apply_status_locked(Job &job, int wait_status);
+  // Enforce wall-clock deadlines and escalate pending terminations to SIGKILL.
+  // Runs once per reaper tick. Caller holds mu_.
+  void enforce_limits_locked();
 
   mutable std::mutex mu_;
   std::unordered_map<int, Job> jobs_;
