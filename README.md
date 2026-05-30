@@ -43,7 +43,7 @@ In active development. The requirements are specified (see [`docs/Whetstone_SRS.
 | Session event log + timeline endpoint | Done |
 | Timeline replay (step-back UI) | Pending |
 | Voice input (Whisper STT) | Stub |
-| Packaging / one-command run | Not started |
+| Packaging / one-command run | `make dev` launcher; macOS Tauri bundle (UI shell — services run separately) |
 
 ## Architecture
 
@@ -90,18 +90,99 @@ It borrows its backend shape from LoomAssist (Tauri + FastAPI + SQLModel) and it
 
 ## Getting started
 
-> Setup is not fully wired yet; these are the intended prerequisites for the v1.0 target on macOS.
+Target platform is **macOS on Apple Silicon**. The four backend services come up
+with one command (`make dev`); the desktop window is started separately.
 
-**Prerequisites**
+### Prerequisites
 
-- macOS on Apple Silicon, 16 GB RAM baseline
-- Xcode Command Line Tools (provides `clang`/`clang++` for C++ cells)
-- Python 3.11+
-- Node.js + a React toolchain, and the Tauri prerequisites
-- `llama.cpp` and `whisper.cpp` built locally
-- A Gemma 4 GGUF model (E4B fits the 16 GB baseline; 26B A4B if you have ~24 GB+)
+- macOS on Apple Silicon, 16 GB RAM baseline.
+- **Xcode Command Line Tools** — `clang++` for the Psirver build and C++ cells:
+  `xcode-select --install`.
+- **Python 3.11+** (`python3`).
+- **Node.js 18+** and npm.
+- **Rust toolchain** + [Tauri prerequisites](https://tauri.app/start/prerequisites/) —
+  only needed to build the bundle or run `npm run tauri dev`. You can skip Rust
+  and run the UI in a browser (`npm run dev`) instead.
+- **`llama.cpp`** built so `llama-server` is on your `PATH` (the LLM co-pilot).
+- **`whisper.cpp`** built so `whisper-server` is on your `PATH` (voice input).
+- The **model files** (next section). The app's tutor and voice features are
+  useless without them.
 
-Build and run instructions will land here once the backend is in place.
+### Getting the models
+
+The model files are large and are **not** in the repo. By default the launcher
+looks in [`models/`](models/) (gitignored); override the paths with
+`WHETSTONE_GEMMA_GGUF` and `WHETSTONE_WHISPER_GGML`.
+
+`apps/backend/config.py` only stores the model *names* the backend sends to each
+server (`gemma-4-e4b`, `whisper-base`); it never stores a file path. The *path*
+is passed to the server by the launcher via `-m`. So "where the model lives" is
+a launcher/env concern, and "what it's called" is a config concern.
+
+**1. Gemma GGUF → `models/gemma-4-e4b.gguf`** (for `llama-server`)
+
+Whetstone targets a **Gemma E4B-class** model (the 16 GB-friendly floor; a
+larger Gemma is the recommended upgrade — see [`docs/model-eval.md`](docs/model-eval.md)).
+Download a Gemma GGUF from Hugging Face and drop it at the default path:
+
+```sh
+# Pick a Gemma E4B GGUF (Q4_K_M is a good size/quality balance) and save it as:
+huggingface-cli download <gemma-e4b-gguf-repo> <file>.gguf \
+  --local-dir models --local-dir-use-symlinks False
+mv models/<file>.gguf models/gemma-4-e4b.gguf
+```
+
+(Or point `WHETSTONE_GEMMA_GGUF` at wherever you already keep it. llama.cpp's
+`llama-server -hf <repo>` can also fetch on first run, but the launcher wants a
+local file it can preflight, so the documented default is a file in `models/`.)
+
+**2. Whisper model → `models/ggml-base.bin`** (for `whisper-server`)
+
+whisper.cpp ships a downloader that produces exactly the file we want:
+
+```sh
+# from your whisper.cpp checkout:
+bash ./models/download-ggml-model.sh base
+cp models/ggml-base.bin /path/to/Whetstone/models/ggml-base.bin
+```
+
+`base` matches the `whisper-base` name in config. A larger model (`small`,
+`medium`) also works — set `WHETSTONE_WHISPER_GGML` to its path.
+
+### Build and run
+
+```sh
+# 1. Start the four local services (backend, Psirver, llama-server, whisper-server).
+#    First run builds Psirver and the backend venv automatically.
+make dev
+#    No models yet? Bring up just the backend + Psirver:
+make dev ARGS="--skip-llm --skip-stt"
+
+# 2. In a second terminal, start the desktop window:
+cd apps/desktop && npm run tauri dev
+#    No Rust/Tauri toolchain? Run the UI in a browser instead:
+cd apps/desktop && npm run dev   # then open http://localhost:1420
+```
+
+`make dev` prints each service, its port, and whether it came up; **Ctrl-C**
+tears all four down and frees their ports. If a model file, the Psirver binary,
+or a port is missing it fails up front with the exact reason rather than coming
+up half-wired. Full detail — ports, env vars, troubleshooting — is in
+[`RUNNING.md`](RUNNING.md), and [`SMOKE_TEST.md`](SMOKE_TEST.md) is a click-by-click
+acceptance pass.
+
+### Packaging (macOS bundle)
+
+```sh
+make bundle    # = cd apps/desktop && npm install && npm run tauri build
+```
+
+This produces a `Whetstone.app` and a `.dmg` under
+`apps/desktop/src-tauri/target/release/bundle/`. **The bundle packages only the
+UI shell** — it does not embed the backend or the model servers. Run `make dev`
+alongside the bundled app so it can reach the backend on loopback (the bundled
+app's `tauri://localhost` origin is already allow-listed in the backend's CORS
+config). Bundling the services as sidecars is a post-v1 item.
 
 ## Repository layout
 
@@ -127,27 +208,12 @@ whetstone/
 
 ## Running locally (development)
 
-The backend and the desktop front end are started separately.
-
-**Backend** (FastAPI, serves on `http://127.0.0.1:8000`):
-
-```sh
-cd apps/backend
-python -m venv .venv && source .venv/bin/activate
-pip install -e .
-uvicorn main:app --reload
-```
-
-**Frontend** (Tauri + React):
-
-```sh
-cd apps/desktop
-npm install
-npm run tauri dev
-```
-
-The desktop app talks to the backend over loopback; the backend in turn
-talks to Psirver, llama-server, and whisper-server over loopback (see
+`make dev` (see [Build and run](#build-and-run)) is the one-command path and the
+recommended way to bring up the stack. To run a single service by hand — for
+example the backend with `--reload` for hot-reloading, or one model server in
+isolation — follow the per-service steps in [`RUNNING.md`](RUNNING.md). The
+desktop app talks to the backend over loopback; the backend in turn talks to
+Psirver, llama-server, and whisper-server over loopback (see
 [Architecture](#architecture)).
 
 ## Roadmap

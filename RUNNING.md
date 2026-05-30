@@ -17,6 +17,41 @@ you start each service on the port in the table above, **no environment
 variables are required**. See [Configuration](#configuration) to change ports
 or the model.
 
+## Quick start — `make dev`
+
+The launcher starts the four local services (everything except the desktop
+window) in one command:
+
+```sh
+make dev                              # or: bash scripts/dev.sh
+make dev ARGS="--skip-llm --skip-stt" # backend + Psirver only (no models yet)
+```
+
+What it does:
+
+- **Preflight, then start.** It checks every prerequisite up front — the Psirver
+  binary (built automatically if missing), the backend venv (created on first
+  run), each model file, and that each port is free — and **fails loudly with
+  the exact reason before starting anything** if something's missing, rather
+  than coming up half-wired and hanging.
+- **Clear startup output.** Each service prints starting → ready (or failed)
+  with its port; readiness is an actual health probe, so llama-server's line
+  only goes green once the model has loaded.
+- **Clean shutdown.** `Ctrl-C` tears down all four and frees their ports
+  (`8000/8080/8081/8082`) — no orphaned llama-server holding the GPU.
+- **Logs** stream to the console and to `.dev-logs/<service>.log`.
+
+Then start the desktop window in a second terminal:
+
+```sh
+cd apps/desktop && npm run tauri dev    # or: npm run dev   (browser fallback)
+```
+
+Skip flags: `--skip-llm`, `--skip-stt`, `--skip-psirver`. Ports and model paths
+are configurable — see [Configuration](#configuration). The rest of this file
+documents starting each service **by hand**, which the launcher automates; reach
+for it when you want one service in isolation or the backend with `--reload`.
+
 ## Prerequisites (cold machine, macOS / Apple Silicon)
 
 - Xcode Command Line Tools — provides `clang++` (Psirver build + C++ cells) and `python3`.
@@ -27,6 +62,9 @@ or the model.
 - A Gemma 4 E4B GGUF model file on disk.
 
 ## Start order
+
+> `make dev` performs steps 1–3 below for you (in this order, with readiness
+> checks). The manual steps are here for running a service in isolation.
 
 Start the services first, then the backend, then the frontend:
 
@@ -175,9 +213,39 @@ by default. Override it with a Vite env var in `apps/desktop/.env`:
 VITE_API_BASE=http://127.0.0.1:9000
 ```
 
+### Launcher environment (`make dev`)
+
+The launcher reads the same `WHETSTONE_*` settings above, plus a few that point
+at the model **files** and binaries (these are launcher concerns — `config.py`
+only stores model *names*, never paths):
+
+| Env var | Default | Purpose |
+| --- | --- | --- |
+| `WHETSTONE_MODELS_DIR` | `./models` | where the launcher looks for model files |
+| `WHETSTONE_GEMMA_GGUF` | `./models/gemma-4-e4b.gguf` | Gemma GGUF passed to `llama-server -m` |
+| `WHETSTONE_WHISPER_GGML` | `./models/ggml-base.bin` | Whisper model passed to `whisper-server -m` |
+| `WHETSTONE_LLAMA_SERVER` | `llama-server` | llama-server binary (if not on `PATH`) |
+| `WHETSTONE_WHISPER_SERVER` | `whisper-server` | whisper-server binary (if not on `PATH`) |
+| `WHETSTONE_LLAMA_SERVER_ARGS` | `-c 8192 -ngl 99` | extra llama-server flags |
+| `PSIRVER_LIMIT_FSIZE_MB` | `1024` (launcher default) | Psirver per-file cap; see the C++ note below |
+
+See the **README → "Getting the models"** section for how to download the two
+model files into `models/`.
+
+> **C++ cells and the file-size cap.** Psirver's own default `RLIMIT_FSIZE` is
+> 64 MB, which is too tight for `clang++` on macOS — a trivial C++ cell fails
+> with `clang++: error: ... Filesize limit exceeded`. The launcher therefore
+> raises `PSIRVER_LIMIT_FSIZE_MB` to `1024` by default; the CPU and wall-clock
+> caps still contain a genuine runaway. If you run Psirver by hand, export
+> `PSIRVER_LIMIT_FSIZE_MB` yourself (see the Psirver README → Configuration).
+
 ## Shutting down
 
-`Ctrl-C` each terminal. To stop Psirver if it's detached, find it by port:
+Under `make dev`, **`Ctrl-C` stops all four services and frees their ports** —
+nothing is left orphaned.
+
+When running services by hand, `Ctrl-C` each terminal. To stop a detached
+Psirver, find it by port:
 
 ```sh
 lsof -ti tcp:8080 | xargs kill
