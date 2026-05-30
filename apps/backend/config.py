@@ -43,6 +43,23 @@ class Settings(BaseSettings):
     host: str = Field(default="127.0.0.1", description="Backend bind host.")
     port: int = Field(default=8000, description="Backend bind port.")
 
+    # --- CORS ----------------------------------------------------------
+    # Origins permitted to make credentialed cross-origin requests. The
+    # frontend is a Tauri webview, so the only legitimate origins are the
+    # Vite dev server (``tauri dev``) and the bundled app's custom-scheme
+    # origin. A wildcard is intentionally avoided: ``*`` is invalid with
+    # credentials and would expose the loopback API to any web page.
+    cors_allowed_origins: list[str] = Field(
+        default=[
+            "http://localhost:1420",  # Tauri dev (Vite devUrl)
+            "http://127.0.0.1:1420",  # same, when reached via 127.0.0.1
+            "tauri://localhost",  # bundled app (macOS / Linux)
+            "http://tauri.localhost",  # bundled app (Windows)
+            "https://tauri.localhost",  # bundled app (Windows, https)
+        ],
+        description="Origins allowed by CORS (Tauri dev server + bundled app).",
+    )
+
     # --- Psirver (C++ code execution) ---------------------------------
     psirver_host: str = Field(default="127.0.0.1")
     psirver_port: int = Field(default=8080)
