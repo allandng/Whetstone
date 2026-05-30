@@ -398,6 +398,64 @@ def test_cell_run_psirver_unreachable_returns_error(client, monkeypatch):
     assert timeline["groups"]["cell_result"][0]["payload"]["status"] == "error"
 
 
+# === Session cells (list) ===================================================
+
+
+def test_list_session_cells_empty(client):
+    session_id = _new_session(client)
+
+    resp = client.get(f"/sessions/{session_id}/cells")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == []
+
+
+def test_list_session_cells_unknown_session_404(client):
+    resp = client.get("/sessions/00000000-0000-0000-0000-000000000000/cells")
+    assert resp.status_code == 404
+
+
+def test_list_session_cells_stable_order_by_order_index(client):
+    session_id = _new_session(client)
+
+    # Create out of order, with explicit order_index, to prove the listing is
+    # sorted by order_index rather than insertion order.
+    for content, order_index in [("b", 1), ("c", 2), ("a", 0)]:
+        resp = client.post(
+            "/cells",
+            json={"session_id": session_id, "content": content, "order_index": order_index},
+        )
+        assert resp.status_code == 200, resp.text
+
+    listed = client.get(f"/sessions/{session_id}/cells")
+    assert listed.status_code == 200, listed.text
+    cells = listed.json()
+    assert [c["content"] for c in cells] == ["a", "b", "c"]
+    assert [c["order_index"] for c in cells] == [0, 1, 2]
+
+
+def test_list_session_cells_includes_last_output_after_run(client, monkeypatch):
+    submit, poll, _ = _psirver_ok(stdout="42\n", exit_code=0)
+    _mock_psirver(monkeypatch, submit, poll)
+
+    session_id = _new_session(client)
+    ran = _new_cell(client, session_id, language="python", content="print(42)")
+    fresh = _new_cell(client, session_id, language="python", content="print(7)")
+
+    run = client.post(f"/cells/{ran['id']}/run")
+    assert run.status_code == 200, run.text
+
+    listed = client.get(f"/sessions/{session_id}/cells")
+    assert listed.status_code == 200, listed.text
+    by_id = {c["id"]: c for c in listed.json()}
+
+    # The cell that ran carries its terminal output and status...
+    assert by_id[ran["id"]]["last_output"] == "42\n"
+    assert by_id[ran["id"]]["status"] == "ok"
+    # ...while a never-run cell has no output and its default status.
+    assert by_id[fresh["id"]]["last_output"] is None
+    assert by_id[fresh["id"]]["status"] == "idle"
+
+
 # === Timeline ===============================================================
 
 
