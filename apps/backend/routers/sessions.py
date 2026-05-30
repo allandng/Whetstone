@@ -16,10 +16,11 @@ from sqlmodel import select
 
 from db import get_session
 from events import list_session_events
-from models import Cell, Event, Session as SessionModel, Spec
+from models import Cell, Event, RequirementItem, Session as SessionModel, Spec
 from schemas import (
     AttachSpecRequest,
     CellRead,
+    RequirementItemRead,
     SessionCreate,
     SessionRead,
     SessionTimeline,
@@ -147,11 +148,14 @@ async def get_session_timeline(
 
     Events are returned both as a flat list ordered by timestamp (for the
     timeline/replay view) and bucketed by ``event_type`` (CELL_RUN,
-    CELL_RESULT, AI_EXCHANGE, MODE_SWITCH, VOICE_NOTE, ...). Each payload is
-    decoded from its stored JSON string.
+    CELL_RESULT, AI_EXCHANGE, MODE_SWITCH, VOICE_NOTE, REQUIREMENT_STATUS, ...).
+    Each payload is decoded from its stored JSON string. ``requirements`` is the
+    session's current checklist, which replay pairs with ``requirement_status``
+    events to reconstruct check-offs at a past point.
     """
 
-    if db.get(SessionModel, session_id) is None:
+    session = db.get(SessionModel, session_id)
+    if session is None:
         raise HTTPException(status_code=404, detail="Session not found.")
 
     rows = list_session_events(db, session_id)
@@ -160,7 +164,29 @@ async def get_session_timeline(
     for event in events:
         groups.setdefault(event.event_type, []).append(event)
 
-    return SessionTimeline(session_id=session_id, events=events, groups=groups)
+    requirements = _session_requirements(db, session)
+
+    return SessionTimeline(
+        session_id=session_id,
+        events=events,
+        groups=groups,
+        requirements=requirements,
+    )
+
+
+def _session_requirements(
+    db: DBSession, session: SessionModel
+) -> list[RequirementItemRead]:
+    """Return the requirement checklist for ``session``'s spec (empty if none)."""
+
+    if session.spec_id is None:
+        return []
+    # No explicit order_by: mirror GET /specs/{id}/requirements (insertion
+    # order) so this list matches what the live RequirementsPane renders.
+    rows = db.exec(
+        select(RequirementItem).where(RequirementItem.spec_id == session.spec_id)
+    ).all()
+    return [RequirementItemRead.model_validate(row) for row in rows]
 
 
 def _to_timeline_event(event: Event) -> TimelineEvent:

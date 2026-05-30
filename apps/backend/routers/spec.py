@@ -30,7 +30,14 @@ from sqlmodel import Session as DBSession
 from sqlmodel import select
 
 from db import get_session, session_scope
-from models import RequirementItem, RequirementStatus, SourceType, Spec
+from events import emit_event
+from models import (
+    RequirementItem,
+    RequirementStatus,
+    Session as SessionModel,
+    SourceType,
+    Spec,
+)
 from schemas import RequirementItemRead, RequirementUpdate, SpecImportResponse
 from services.llm_client import LLMClient, LLMUnavailableError
 from services.spec_parser import (
@@ -93,6 +100,7 @@ async def update_requirement(
     if item is None:
         raise HTTPException(status_code=404, detail="Requirement not found.")
 
+    old_status = item.status
     if body.status is not None:
         item.status = body.status
     if body.text is not None:
@@ -101,7 +109,39 @@ async def update_requirement(
     db.add(item)
     db.commit()
     db.refresh(item)
+
+    if body.status is not None and body.status != old_status:
+        _record_status_change(db, item, old_status)
+
     return item
+
+
+def _record_status_change(
+    db: DBSession, item: RequirementItem, old_status: RequirementStatus
+) -> None:
+    """Append a ``requirement_status`` event so check-offs land on the timeline.
+
+    Requirements belong to a spec, and a spec may back several sessions, so the
+    event is appended to every session that references this requirement's spec.
+    This is what lets timeline replay reconstruct requirement check-offs as they
+    stood at a past point (the PATCH route is the only place status changes).
+    """
+
+    sessions = db.exec(
+        select(SessionModel).where(SessionModel.spec_id == item.spec_id)
+    ).all()
+    for session in sessions:
+        emit_event(
+            db,
+            session_id=session.id,
+            event_type="requirement_status",
+            payload={
+                "requirement_id": str(item.id),
+                "text": item.text,
+                "from": old_status.value,
+                "to": item.status.value,
+            },
+        )
 
 
 # --- Helpers ---------------------------------------------------------------
