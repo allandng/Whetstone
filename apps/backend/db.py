@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 
 from sqlalchemy import event
 from sqlmodel import Session, SQLModel, create_engine
@@ -47,6 +48,25 @@ def _set_sqlite_pragmas(dbapi_connection, connection_record) -> None:
         cursor.close()
 
 
+def _ensure_storage() -> None:
+    """Create the storage directories the app needs before first use.
+
+    SQLite creates the database *file* but not any missing parent directories,
+    so a configured path like ``sqlite:///./var/whetstone.db`` (or the bundled
+    app's per-user data location) would otherwise crash on a fresh machine with
+    "unable to open database file". Creating the dirs up front — idempotently —
+    keeps first run from failing. The ``data_dir`` (app-managed uploads/exports)
+    is ensured the same way.
+    """
+
+    settings = get_settings()
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+
+    db_path = engine.url.database
+    if db_path and db_path != ":memory:":
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+
+
 def create_db_and_tables() -> None:
     """Create all tables registered on the SQLModel metadata.
 
@@ -57,6 +77,7 @@ def create_db_and_tables() -> None:
 
     import models  # noqa: F401  (ensure models are registered)
 
+    _ensure_storage()
     SQLModel.metadata.create_all(engine)
 
 

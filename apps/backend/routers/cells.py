@@ -21,7 +21,7 @@ from db import get_session
 from events import emit_event
 from models import Cell, CellType, Session as SessionModel
 from schemas import CellCreate, CellRead, CellUpdate
-from services.psirver_client import PsirverClient
+from services.psirver_client import PsirverClient, PsirverUnavailableError
 
 router = APIRouter(prefix="/cells", tags=["cells"])
 
@@ -188,7 +188,7 @@ async def _execute(cell: Cell) -> tuple[str, str]:
         return "timeout", "Execution did not finish within the time limit."
     except ValueError as exc:  # unsupported language
         return "error", str(exc)
-    except httpx.HTTPError as exc:
+    except (PsirverUnavailableError, httpx.HTTPError) as exc:
         return "error", f"Could not reach the execution service: {exc}"
 
 

@@ -44,6 +44,7 @@ import routers.spec as spec_router  # noqa: E402
 from main import app  # noqa: E402
 from models import Cell, Event, SourceType, Spec  # noqa: E402
 from services.llm_client import LLMUnavailableError  # noqa: E402
+from services.psirver_client import PsirverUnavailableError  # noqa: E402
 from services.stt_client import STTUnavailableError  # noqa: E402
 
 
@@ -239,6 +240,95 @@ def test_health_ok_when_psirver_unreachable(client, monkeypatch):
     assert resp.json() == {"status": "ok"}
 
 
+# === CORS ===================================================================
+
+# The Tauri dev origin must be in the allowed list (config default) or the
+# running app's every request fails with an opaque CORS error.
+_ALLOWED_ORIGIN = "http://localhost:1420"
+_DISALLOWED_ORIGIN = "http://evil.example"
+
+
+def test_cors_allowed_origin_gets_credentialed_access(client):
+    resp = client.get("/health", headers={"Origin": _ALLOWED_ORIGIN})
+    assert resp.status_code == 200
+    # The specific origin is echoed (never "*"), and credentials are permitted.
+    assert resp.headers.get("access-control-allow-origin") == _ALLOWED_ORIGIN
+    assert resp.headers.get("access-control-allow-credentials") == "true"
+
+
+def test_cors_allowed_origin_preflight_succeeds(client):
+    resp = client.options(
+        "/sessions",
+        headers={
+            "Origin": _ALLOWED_ORIGIN,
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers.get("access-control-allow-origin") == _ALLOWED_ORIGIN
+    assert resp.headers.get("access-control-allow-credentials") == "true"
+
+
+def test_cors_disallowed_origin_denied_credentialed_access(client):
+    resp = client.get("/health", headers={"Origin": _DISALLOWED_ORIGIN})
+    # CORS is browser-enforced, so the response body still arrives. The gate is
+    # ``Access-Control-Allow-Origin``: without it echoing the caller's origin
+    # the browser refuses to expose a credentialed response. It must be absent
+    # for a disallowed origin (and never the wildcard "*").
+    allow_origin = resp.headers.get("access-control-allow-origin")
+    assert allow_origin != _DISALLOWED_ORIGIN
+    assert allow_origin != "*"
+    assert allow_origin is None
+
+
+def test_cors_disallowed_origin_preflight_rejected(client):
+    resp = client.options(
+        "/sessions",
+        headers={
+            "Origin": _DISALLOWED_ORIGIN,
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    # A preflight from a disallowed origin is rejected outright, and never
+    # echoes the origin back as allowed.
+    assert resp.status_code == 400
+    assert resp.headers.get("access-control-allow-origin") != _DISALLOWED_ORIGIN
+
+
+# === Global error handling ==================================================
+
+
+def test_global_exception_handler_returns_structured_error(fresh_db, monkeypatch):
+    """An unexpected error returns a clean JSON shape, not a stack trace.
+
+    ``raise_server_exceptions=False`` makes the TestClient surface the response
+    the client would actually receive rather than re-raising the error
+    in-process. The non-HTTPException path is triggered by making the LLM client
+    raise a plain ``RuntimeError`` (not the typed ``LLMUnavailableError`` the
+    endpoint knows how to map to a 503).
+    """
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("secret internal detail")
+
+    monkeypatch.setattr(ai_router.llm_client, "ask", _boom)
+
+    with TestClient(app, raise_server_exceptions=False) as c:
+        session_id = c.post("/sessions", json={"title": "t"}).json()["id"]
+        cell = c.post(
+            "/cells", json={"session_id": session_id, "content": "x = 1"}
+        ).json()
+        resp = c.post("/ai/complexity", json={"cell_id": cell["id"]})
+
+    assert resp.status_code == 500
+    # Structured, parseable shape matching the rest of the API ({"detail": ...}).
+    assert resp.json() == {"detail": "Internal Server Error"}
+    # No internals leak: not the exception type, its message, or a traceback.
+    assert "RuntimeError" not in resp.text
+    assert "secret internal detail" not in resp.text
+    assert "Traceback" not in resp.text
+
+
 # === Session CRUD ===========================================================
 
 
@@ -415,6 +505,28 @@ def test_cell_run_psirver_unreachable_returns_error(client, monkeypatch):
     timeline = client.get(f"/sessions/{session_id}/timeline").json()
     assert "cell_run" in timeline["groups"]
     assert timeline["groups"]["cell_result"][0]["payload"]["status"] == "error"
+
+
+def test_cell_run_psirver_typed_unavailable_returns_clean_error(client, monkeypatch):
+    """The typed ``PsirverUnavailableError`` (what the hardened client raises
+    when Psirver is down or errors) folds into a recorded run error, not a 500 —
+    the same clean-failure contract the LLM/STT clients use."""
+
+    async def _submit(language, source):
+        raise PsirverUnavailableError(
+            "Could not reach Psirver at http://127.0.0.1:8080: connection refused"
+        )
+
+    _mock_psirver(monkeypatch, _submit)
+
+    session_id = _new_session(client)
+    cell = _new_cell(client, session_id, language="python", content="print(1)")
+
+    run = client.post(f"/cells/{cell['id']}/run")
+    assert run.status_code == 200, run.text
+    body = run.json()
+    assert body["status"] == "error"
+    assert "Could not reach the execution service" in body["last_output"]
 
 
 # === Session cells (list) ===================================================
