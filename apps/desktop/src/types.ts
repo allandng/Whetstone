@@ -113,3 +113,7 @@ export type ExplainErrorResponse = {
 export type ComplexityResponse = {
   analysis: string;
 };
+
+export type TranscribeResponse = {
+  transcript: string;
+};
