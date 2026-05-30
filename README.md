@@ -2,7 +2,7 @@
 
 **A local-first problem-solving environment for CS students. Your code, your reasoning, and an AI tutor - all on your own machine.**
 
-![status](https://img.shields.io/badge/status-in%20development-orange)
+![version](https://img.shields.io/badge/version-1.0-blue)
 ![platform](https://img.shields.io/badge/platform-macOS%20(Apple%20Silicon)-lightgrey)
 ![offline](https://img.shields.io/badge/runs-100%25%20offline-brightgreen)
 
@@ -28,7 +28,7 @@ Whetstone takes the opposite stance. Everything runs offline by default, and the
 
 ## Status
 
-In active development. The requirements are specified (see [`docs/Whetstone_SRS.md`](docs/Whetstone_SRS.md)), and the execution backend, the Direct-mode tutor, and the core workspace UI are in and tested. Current work is the Socratic tutor, voice input, and the remaining UI wiring. This README describes the v1.0 target; the table below reflects what actually runs today.
+v1.0. The requirements are specified (see [`docs/Whetstone_SRS.md`](docs/Whetstone_SRS.md)), and the functional core is in and tested: code execution (Python + C++), the Direct and Socratic tutor modes, spec import with requirement tracking, the session event log, and on-device voice dictation. The release also adds execution hardening, restricted CORS, CI, and a one-command launcher with a macOS bundle. The table below reflects what runs today; the remaining edges are named under [Known limitations](#known-limitations) and [Roadmap](#roadmap).
 
 | Area | State |
 |---|---|
@@ -36,14 +36,17 @@ In active development. The requirements are specified (see [`docs/Whetstone_SRS.
 | Psirver async job system (fork/exec, lifecycle, capture) | Done |
 | Backend API (sessions, cells, spec, timeline) | Done |
 | Cell execution (backend ↔ Psirver, Python + C++) | Done |
-| Notebook UI (run / edit cells) | Working — add-cell + cell-reload pending |
+| Notebook UI (run / edit / add cells, restored on open) | Done |
 | Spec import + requirement tracking | Done |
 | Local LLM co-pilot — Direct mode | Done |
-| Local LLM co-pilot — Socratic mode | Not started |
+| Local LLM co-pilot — Socratic mode | Done |
 | Session event log + timeline endpoint | Done |
-| Timeline replay (step-back UI) | Pending |
-| Voice input (Whisper STT) | Stub |
-| Packaging / one-command run | `make dev` launcher; macOS Tauri bundle (UI shell — services run separately) |
+| Timeline replay (step-back scrubber over the event log) | Done |
+| Voice input (Whisper STT → co-pilot dictation) | Done |
+| Execution hardening (per-job rlimits, fd hygiene, env scrubbing) | Done |
+| Restricted CORS + production error handling | Done |
+| CI (backend + frontend tests) | Done |
+| Packaging / one-command run | `make dev` launcher + macOS Tauri bundle (UI shell — services run separately) |
 
 ## Architecture
 
@@ -199,13 +202,15 @@ whetstone/
 │   └── backend/            # FastAPI backend
 │       ├── main.py         # app factory, mounts routers
 │       ├── db.py           # SQLite engine + session factory (SQLModel)
-│       ├── models.py       # SQLModel table stubs
+│       ├── models.py       # SQLModel tables (Session, Cell, Spec, Event, …)
 │       ├── config.py       # pydantic-settings configuration
 │       ├── routers/        # sessions, cells, ai, spec
-│       └── services/       # psirver / llm / stt HTTP client stubs
+│       └── services/       # psirver / llm / stt / spec HTTP clients
 ├── services/
-│   └── psirver/            # C++ code-execution backend (placeholder)
+│   └── psirver/            # C++ code-execution service (fork/exec job runner)
+├── scripts/                # dev.sh — one-command local launcher
 ├── docs/                   # SRS and design docs
+├── Makefile                # make dev / make bundle
 └── README.md
 ```
 
@@ -221,17 +226,54 @@ Psirver, llama-server, and whisper-server over loopback (see
 
 ## Roadmap
 
-The build order, roughly:
+**Shipped in v1.0**
 
-1. Finish the Psirver async job system (the execution spine).
-2. Notebook and cell execution wired to Psirver.
-3. Local LLM co-pilot in direct mode.
-4. Spec parsing and requirement tracking.
-5. Session event log and timeline replay.
-6. Socratic mode and voice input.
-7. Stretch: session branching, suite interop, export polish, sandbox hardening.
+- Psirver async job system (the execution spine) with Python + C++ cell execution.
+- Notebook workspace: run, edit, and add cells; cells restored when a session opens.
+- Spec import → tracked requirement checklist.
+- On-device LLM co-pilot in both Direct and Socratic modes.
+- Session event log + timeline endpoint, with a step-back replay scrubber that
+  reconstructs session state at any point (view-only — it never re-runs code).
+- On-device voice dictation into the co-pilot prompt (Whisper).
+- Execution hardening (per-job rlimits, fd hygiene, environment scrubbing),
+  restricted CORS with loud-failure error handling, CI for backend and frontend,
+  and a one-command dev launcher plus a macOS Tauri bundle.
+
+**Future / stretch**
+
+- Moving the academic-integrity marker guarantee server-side so it no longer
+  depends on a small model emitting it (see [`docs/model-eval.md`](docs/model-eval.md) §B).
+- Bundling the backend and model servers as Tauri sidecars so the app is a single launch.
+- Session branching, suite interop (LoomAssist / Chalkmark), and export polish.
+- Sandbox hardening beyond the v1.0 security floor.
 
 See the [SRS](docs/Whetstone_SRS.md) for the full requirements, diagrams, and design decisions.
+
+## Known limitations
+
+v1.0 ships a complete core. These are the edges it knowingly leaves for later —
+named here on purpose rather than hidden:
+
+- **The co-pilot mode resets to Direct on a full reload.** Direct/Socratic is
+  in-memory UI state; a full page reload (browser dev mode, or a webview reload)
+  drops back to Direct rather than restoring the last-used mode.
+- **The academic-integrity marker is best-effort on a small model.** When the
+  tutor hands over a full solution it is asked to prepend a
+  `[FULL SOLUTION …]` banner, but a small on-device model emits that marker only
+  unreliably. v1.0 leans on the always-on "verify this" framing instead of
+  guaranteeing the banner; making the guarantee server-side is a documented
+  follow-up (see [`docs/model-eval.md`](docs/model-eval.md) §B).
+- **The workspace breadcrumb is a cosmetic label.** The header always reads
+  `scratchpad.cpp` regardless of whether the active cell is Python or C++ — it
+  is a brand-style breadcrumb, not the real per-cell filename.
+- **The bundle ships the UI shell only.** The macOS bundle packages the desktop
+  UI; the backend and the three model/exec services are launched separately via
+  `make dev`. Sidecar packaging is post-v1.
+- **Model-quality numbers are provisional.** The model-eval harness is in place,
+  but the empirical scores (complexity reliability, marker miss-rate) have not
+  been run against a live model, so the "E4B floor / larger-Gemma recommended"
+  guidance is a reasoned default, not a measured one
+  (see [`docs/model-eval.md`](docs/model-eval.md)).
 
 ## License
 

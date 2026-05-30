@@ -10,7 +10,7 @@ backend orchestrates three independent loopback services. Everything binds to
 | Psirver (code exec) | `127.0.0.1:8080` | `psirver_host`, `psirver_port` | C++ job server |
 | FastAPI backend | `127.0.0.1:8000` | `host`, `port` | orchestration + SQLite |
 | Tauri frontend | `localhost:1420` (Vite) | — | desktop window |
-| whisper-server (STT) | `127.0.0.1:8082` | `stt_host`, `stt_port`, `stt_model` | optional; `/ai/transcribe` is still a stub |
+| whisper-server (STT) | `127.0.0.1:8082` | `stt_host`, `stt_port`, `stt_model` | optional; powers co-pilot voice dictation via `/ai/transcribe` |
 
 The defaults in `apps/backend/config.py` already describe this layout, so if
 you start each service on the port in the table above, **no environment
