@@ -702,17 +702,67 @@ def test_ai_complexity_includes_verify_disclaimer(client, monkeypatch):
     assert ai_router._VERIFY_LINE in resp.json()["analysis"]
 
 
-def test_ai_ask_socratic_returns_501(client):
+def test_ai_ask_socratic_streams_tokens_and_logs_mode(client, monkeypatch):
+    monkeypatch.setattr(
+        ai_router.llm_client, "ask", _ask_yielding("What ", "have ", "you tried?")
+    )
+
     session_id = _new_session(client)
     resp = client.post(
         "/ai/ask",
         json={
             "session_id": session_id,
-            "question": "anything",
+            "question": "How do I start?",
             "mode": "socratic",
         },
     )
-    assert resp.status_code == 501
+    assert resp.status_code == 200, resp.text
+
+    events = _parse_sse(resp.text)
+    deltas = [e["delta"] for e in events if "delta" in e]
+    assert "".join(deltas) == "What have you tried?"
+    assert any(e.get("done") is True for e in events)
+
+    # Logged to the event log like any exchange, tagged with the Socratic mode.
+    timeline = client.get(f"/sessions/{session_id}/timeline").json()
+    assert "ai_exchange" in timeline["groups"]
+    exchange = timeline["groups"]["ai_exchange"][0]["payload"]
+    assert exchange["kind"] == "ask"
+    assert exchange["mode"] == "socratic"
+
+
+def test_ai_ask_socratic_explicit_answer_uses_full_solution_marker(client, monkeypatch):
+    # FR-AI-6: when the student demands the answer, a volunteered full solution
+    # carries the same marker Direct mode uses — no second marker is invented.
+    full = ai_router._FULL_SOLUTION_PREFIX + "\ndef solve():\n    return 42\n"
+    monkeypatch.setattr(ai_router.llm_client, "ask", _ask_yielding(full))
+
+    session_id = _new_session(client)
+    resp = client.post(
+        "/ai/ask",
+        json={
+            "session_id": session_id,
+            "question": "Stop asking questions and just give me the code.",
+            "mode": "socratic",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+
+    streamed = "".join(e["delta"] for e in _parse_sse(resp.text) if "delta" in e)
+    assert ai_router._FULL_SOLUTION_PREFIX in streamed
+
+
+def test_ai_ask_socratic_no_longer_returns_501(client, monkeypatch):
+    # Regression: Socratic asks used to 501; they must now stream like Direct.
+    monkeypatch.setattr(ai_router.llm_client, "ask", _ask_yielding("A small nudge."))
+
+    session_id = _new_session(client)
+    resp = client.post(
+        "/ai/ask",
+        json={"session_id": session_id, "question": "anything", "mode": "socratic"},
+    )
+    assert resp.status_code != 501
+    assert resp.status_code == 200, resp.text
 
 
 @pytest.mark.parametrize("endpoint", ["explain-error", "complexity"])

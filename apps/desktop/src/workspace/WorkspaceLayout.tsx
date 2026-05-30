@@ -283,7 +283,7 @@ export function WorkspaceLayout({ onNavigateHome }: Props) {
   };
 
   const askTutor = (question: string) => {
-    if (mode !== "direct" || aiBusy) return;
+    if (aiBusy) return;
     const tutorId = uid();
     setThread((t) => [
       ...t,
@@ -308,7 +308,7 @@ export function WorkspaceLayout({ onNavigateHome }: Props) {
       session_id: session.id,
       cell_id: activeCellId,
       question,
-      mode: "direct",
+      mode,
     };
 
     askStream(
@@ -328,11 +328,11 @@ export function WorkspaceLayout({ onNavigateHome }: Props) {
       controller.signal,
     ).catch((err) => {
       const e = err as ApiError;
-      const msg =
-        e?.status === 501
-          ? "Socratic mode is not implemented yet."
-          : (e?.message ?? "The local co-pilot is unavailable.");
-      settle({ text: msg, streaming: false, errored: true });
+      settle({
+        text: e?.message ?? "The local co-pilot is unavailable.",
+        streaming: false,
+        errored: true,
+      });
       setAiBusy(false);
     });
   };
