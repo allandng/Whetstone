@@ -44,6 +44,7 @@ import routers.spec as spec_router  # noqa: E402
 from main import app  # noqa: E402
 from models import Cell, Event, SourceType, Spec  # noqa: E402
 from services.llm_client import LLMUnavailableError  # noqa: E402
+from services.psirver_client import PsirverUnavailableError  # noqa: E402
 from services.stt_client import STTUnavailableError  # noqa: E402
 
 
@@ -504,6 +505,28 @@ def test_cell_run_psirver_unreachable_returns_error(client, monkeypatch):
     timeline = client.get(f"/sessions/{session_id}/timeline").json()
     assert "cell_run" in timeline["groups"]
     assert timeline["groups"]["cell_result"][0]["payload"]["status"] == "error"
+
+
+def test_cell_run_psirver_typed_unavailable_returns_clean_error(client, monkeypatch):
+    """The typed ``PsirverUnavailableError`` (what the hardened client raises
+    when Psirver is down or errors) folds into a recorded run error, not a 500 —
+    the same clean-failure contract the LLM/STT clients use."""
+
+    async def _submit(language, source):
+        raise PsirverUnavailableError(
+            "Could not reach Psirver at http://127.0.0.1:8080: connection refused"
+        )
+
+    _mock_psirver(monkeypatch, _submit)
+
+    session_id = _new_session(client)
+    cell = _new_cell(client, session_id, language="python", content="print(1)")
+
+    run = client.post(f"/cells/{cell['id']}/run")
+    assert run.status_code == 200, run.text
+    body = run.json()
+    assert body["status"] == "error"
+    assert "Could not reach the execution service" in body["last_output"]
 
 
 # === Session cells (list) ===================================================
