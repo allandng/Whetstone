@@ -21,7 +21,7 @@ import json
 import uuid
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlmodel import Session as DBSession
@@ -31,10 +31,12 @@ from db import get_session, session_scope
 from events import emit_event
 from models import Cell, Event, RequirementItem, Session as SessionModel
 from services.llm_client import LLMClient, LLMUnavailableError
+from services.stt_client import STTClient, STTUnavailableError
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
 llm_client = LLMClient()
+stt_client = STTClient()
 
 # Event-log type for an AI exchange; the timeline (FR-SESS-1) and the
 # "recent exchanges" context below both key off this.
@@ -85,6 +87,10 @@ class ExplainErrorResponse(BaseModel):
 
 class ComplexityResponse(BaseModel):
     analysis: str
+
+
+class TranscribeResponse(BaseModel):
+    transcript: str
 
 
 # --- Endpoints -------------------------------------------------------------
@@ -160,15 +166,23 @@ async def ask(body: AskRequest, db: DBSession = Depends(get_session)):
     )
 
 
-@router.post("/transcribe")
-async def transcribe() -> dict:
-    """Transcribe uploaded audio to text via whisper-server. Stub.
+@router.post("/transcribe", response_model=TranscribeResponse)
+async def transcribe(audio: UploadFile = File(...)) -> TranscribeResponse:
+    """Transcribe uploaded audio to text via whisper-server (FR-VOICE-1).
 
-    Placeholder for the voice-input feature (SRS §4.5); not part of the
-    Direct-mode co-pilot implemented here.
+    On-device STT for the voice-input feature (SRS §4.5). A dead whisper-server
+    maps to a clean 503 — the same loud-failure contract the LLM endpoints use —
+    rather than letting a connection error bubble up as a 500.
     """
 
-    return {}
+    data = await audio.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="No audio was uploaded.")
+    try:
+        transcript = await stt_client.transcribe(data)
+    except STTUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return TranscribeResponse(transcript=transcript)
 
 
 @router.post("/complexity", response_model=ComplexityResponse)

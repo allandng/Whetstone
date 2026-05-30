@@ -44,6 +44,7 @@ import routers.spec as spec_router  # noqa: E402
 from main import app  # noqa: E402
 from models import Cell, Event, SourceType, Spec  # noqa: E402
 from services.llm_client import LLMUnavailableError  # noqa: E402
+from services.stt_client import STTUnavailableError  # noqa: E402
 
 
 # --- Fixtures ---------------------------------------------------------------
@@ -88,6 +89,24 @@ def _ask_unavailable(message: str = "llama-server is not reachable"):
         yield  # unreachable; makes this an async generator function
 
     return _ask
+
+
+def _stt_returning(text: str):
+    """An ``STTClient.transcribe`` replacement that returns a fixed transcript."""
+
+    async def _transcribe(audio, language="en"):
+        return text
+
+    return _transcribe
+
+
+def _stt_unavailable(message: str = "whisper-server is not reachable"):
+    """An ``STTClient.transcribe`` replacement that fails like a dead server."""
+
+    async def _transcribe(audio, language="en"):
+        raise STTUnavailableError(message)
+
+    return _transcribe
 
 
 def _psirver_ok(stdout="42\n", stderr="", exit_code=0, status="COMPLETED"):
@@ -798,3 +817,31 @@ def test_ai_ask_llm_unreachable_streams_error(client, monkeypatch):
     events = _parse_sse(resp.text)
     assert any("error" in e for e in events)
     assert not any(e.get("done") is True for e in events)
+
+
+# === Voice input (transcription) ============================================
+
+
+def test_ai_transcribe_returns_transcript(client, monkeypatch):
+    monkeypatch.setattr(
+        ai_router.stt_client, "transcribe", _stt_returning("hello from voice")
+    )
+
+    resp = client.post(
+        "/ai/transcribe",
+        files={"audio": ("clip.webm", b"\x00\x01\x02fake-audio", "audio/webm")},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["transcript"] == "hello from voice"
+
+
+def test_ai_transcribe_stt_unreachable_returns_503_not_500(client, monkeypatch):
+    monkeypatch.setattr(ai_router.stt_client, "transcribe", _stt_unavailable())
+
+    resp = client.post(
+        "/ai/transcribe",
+        files={"audio": ("clip.webm", b"\x00\x01\x02fake-audio", "audio/webm")},
+    )
+    # A dead whisper-server is a clean 503, not a 500 stack trace.
+    assert resp.status_code == 503, resp.text
+    assert "reachable" in resp.json()["detail"].lower()
