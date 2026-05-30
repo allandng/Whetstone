@@ -47,9 +47,15 @@ const JobLimits &job_limits()
     // cross-platform backstop for memory runaways. 0 disables the cap.
     l.address_bytes =
         env_rlim("PSIRVER_LIMIT_AS_MB", 2048, 1024ull * 1024ull);
-    // 64 MiB per output file: ample for legitimate assignment output, but an
-    // unbounded print loop trips SIGXFSZ instead of filling the disk.
-    l.file_bytes = env_rlim("PSIRVER_LIMIT_FSIZE_MB", 64, 1024ull * 1024ull);
+    // 1 GiB per output file. This cap serves double duty: it bounds program
+    // output (an unbounded print loop trips SIGXFSZ instead of filling the
+    // disk) *and* it must clear the temporaries clang++ writes when compiling a
+    // C++ cell. On macOS a trivial C++ program blows past a 64 MiB cap mid-
+    // compile ("Filesize limit exceeded"), so the floor is sized for the
+    // compiler, not the output; the 10 s CPU and 15 s wall caps are the real
+    // backstops against a genuine runaway. Operators who only run trusted
+    // Python can retighten via PSIRVER_LIMIT_FSIZE_MB.
+    l.file_bytes = env_rlim("PSIRVER_LIMIT_FSIZE_MB", 1024, 1024ull * 1024ull);
     // 15 s wall clock catches a job that sleeps/blocks (and so never trips the
     // CPU cap). Kept well under the backend's ~30 s poll ceiling so the job
     // terminates and is reported, rather than the backend giving up first.

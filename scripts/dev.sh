@@ -49,11 +49,12 @@ WHISPER_SERVER_BIN="${WHETSTONE_WHISPER_SERVER:-whisper-server}"
 LLAMA_SERVER_ARGS="${WHETSTONE_LLAMA_SERVER_ARGS:--c 8192 -ngl 99}"
 WHISPER_SERVER_ARGS="${WHETSTONE_WHISPER_SERVER_ARGS:-}"
 
-# clang++ on macOS writes sizable intermediates when compiling a C++ cell, so
-# Psirver's default RLIMIT_FSIZE (64 MB) trips "Filesize limit exceeded" on even
-# a trivial program. Give compiles headroom for dev unless the dev set it; the
-# CPU and wall-clock caps still contain a genuine runaway. Exported so the
-# Psirver child inherits it (see Psirver README → Configuration).
+# clang++ on macOS writes sizable intermediates when compiling a C++ cell, so a
+# tight RLIMIT_FSIZE trips "Filesize limit exceeded" on even a trivial program.
+# Psirver now defaults this to 1024 MB itself (see services/psirver/src/Limits.cc),
+# so every launch path inherits the headroom; the CPU and wall-clock caps still
+# contain a genuine runaway. We export it here only to keep the knob explicit and
+# overridable from the dev environment.
 export PSIRVER_LIMIT_FSIZE_MB="${PSIRVER_LIMIT_FSIZE_MB:-1024}"
 
 # Readiness timeouts (seconds). Model servers load weights before serving, so
