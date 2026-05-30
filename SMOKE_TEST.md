@@ -1,8 +1,8 @@
 # Whetstone manual smoke test
 
 A click-by-click pass to confirm the frontend works against a freshly started
-stack. Assumes a cold machine — get the services up first with
-[RUNNING.md](RUNNING.md).
+stack. Assumes a cold machine — get the services up first with `make dev` (the
+one-command launcher) or the per-service steps in [RUNNING.md](RUNNING.md).
 
 **What each part needs running:**
 
