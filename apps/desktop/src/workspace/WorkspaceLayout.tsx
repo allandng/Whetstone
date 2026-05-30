@@ -4,27 +4,28 @@ import {
   createCell,
   createSession,
   listRequirements,
+  listSessionCells,
   listSessions,
   runCell,
   updateCell,
   updateRequirement,
   askStream,
   type ApiError,
+  type CellRead,
 } from "../api";
 import type { AiMode, AskRequest, RequirementItemRead, RequirementStatus, SessionRead } from "../types";
 import { Header } from "./Header";
 import { RequirementsPane } from "./RequirementsPane";
-import { NotebookPane } from "./NotebookPane";
+import { NotebookPane, type NotebookCell } from "./NotebookPane";
 import { CoPilotPane, type ChatMessage } from "./CoPilotPane";
 import { Footer } from "./Footer";
 import { TimelineDrawer } from "./TimelineDrawer";
 
-const LANGUAGE = "cpp";
-const CELL_LABEL = "Cell 01";
 const FILE_NAME = "scratchpad.cpp";
 
-// Seed cell shown on every fresh notebook (decision: start from the seed, do not
-// imply prior cells are restored — there is no GET /sessions/{id}/cells route).
+// Seed cell created for a brand-new (empty) session so the notebook opens with
+// a runnable starter rather than a blank canvas. It is persisted server-side,
+// so it restores on reload like any other cell.
 const SEED_CODE = `// Compiled via system clang++ toolchain
 #include <iostream>
 #include <unistd.h>
@@ -33,6 +34,35 @@ int main() {
     std::cout << "[Psirver] Init loopback worker PID: " << getpid() << std::endl;
     return 0;
 }`;
+
+// Starter source for cells the user adds, so a fresh cell runs to real output.
+const STARTERS: Record<string, string> = {
+  python: 'print("hello from python")',
+  cpp: `#include <iostream>
+
+int main() {
+    std::cout << "hello from c++" << std::endl;
+    return 0;
+}`,
+};
+
+function starterFor(language: string): string {
+  return STARTERS[language] ?? "";
+}
+
+// Build the UI view-model from a server cell. A never-run cell has status
+// "idle" server-side; map that to "" so the output pane shows the empty state.
+function toView(cell: CellRead): NotebookCell {
+  return {
+    id: cell.id,
+    language: cell.language ?? "python",
+    content: cell.content,
+    output: cell.last_output,
+    status: cell.status === "idle" ? "" : cell.status,
+    running: false,
+    note: null,
+  };
+}
 
 function apiHost(): string {
   try {
@@ -63,24 +93,29 @@ export function WorkspaceLayout({ onNavigateHome }: Props) {
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [lastActivity, setLastActivity] = useState<string | null>(null);
 
-  // Notebook cell (single cell for v1).
-  const [content, setContent] = useState(SEED_CODE);
-  const [serverCellId, setServerCellId] = useState<string | null>(null);
-  const [lastSyncedContent, setLastSyncedContent] = useState<string | null>(null);
-  const [running, setRunning] = useState(false);
-  const [output, setOutput] = useState<string | null>(null);
-  const [cellStatus, setCellStatus] = useState("");
-  const [runNote, setRunNote] = useState<string | null>(null);
+  // Notebook cells, in display order.
+  const [cells, setCells] = useState<NotebookCell[]>([]);
+  const [adding, setAdding] = useState(false);
+  // The cell the co-pilot reasons about (last focused / added). Sent as
+  // AskRequest.cell_id so the tutor has the relevant cell in context.
+  const [activeCellId, setActiveCellId] = useState<string | null>(null);
+  // Per-cell content last synced to the server, so we only PUT on real edits.
+  const lastSyncedRef = useRef<Map<string, string>>(new Map());
+  // Per-cell in-flight run controllers, so each cell cancels independently.
+  const runAbortRef = useRef<Map<string, AbortController>>(new Map());
 
   // Co-pilot.
   const [thread, setThread] = useState<ChatMessage[]>([]);
   const [aiBusy, setAiBusy] = useState(false);
 
-  const runAbortRef = useRef<AbortController | null>(null);
   const askAbortRef = useRef<AbortController | null>(null);
 
-  // Bootstrap: reuse the most recently modified session, else create one. If the
-  // backend is unreachable, fall back to a local-only shell (offline-first).
+  const patchCell = (cellId: string, patch: Partial<NotebookCell>) =>
+    setCells((cs) => cs.map((c) => (c.id === cellId ? { ...c, ...patch } : c)));
+
+  // Bootstrap: reuse the most recently modified session (else create one), then
+  // restore its cells and their last outputs. If the backend is unreachable,
+  // fall back to a local-only shell with one starter cell (offline-first).
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -90,6 +125,27 @@ export function WorkspaceLayout({ onNavigateHome }: Props) {
         if (cancelled) return;
         setSession(picked);
         setOnline(true);
+
+        const existing = await listSessionCells(picked.id);
+        if (cancelled) return;
+        let views: NotebookCell[];
+        if (existing.length > 0) {
+          existing.forEach((c) => lastSyncedRef.current.set(c.id, c.content));
+          views = existing.map(toView);
+        } else {
+          const seed = await createCell({
+            session_id: picked.id,
+            cell_type: "code",
+            language: "cpp",
+            content: SEED_CODE,
+          });
+          if (cancelled) return;
+          lastSyncedRef.current.set(seed.id, seed.content);
+          views = [toView(seed)];
+        }
+        setCells(views);
+        setActiveCellId(views[0]?.id ?? null);
+
         if (picked.spec_id) {
           setReqLoading(true);
           try {
@@ -105,6 +161,21 @@ export function WorkspaceLayout({ onNavigateHome }: Props) {
         if (!cancelled) {
           setOnline(false);
           setSession(null);
+          // Local-only starter cell so the notebook isn't blank offline. Its id
+          // never reaches the server: runs and Add are gated on `online`.
+          const localId = uid();
+          setCells([
+            {
+              id: localId,
+              language: "cpp",
+              content: SEED_CODE,
+              output: null,
+              status: "",
+              running: false,
+              note: null,
+            },
+          ]);
+          setActiveCellId(localId);
         }
       } finally {
         if (!cancelled) setBootstrapped(true);
@@ -127,68 +198,84 @@ export function WorkspaceLayout({ onNavigateHome }: Props) {
     }
   };
 
-  const runCellNow = async () => {
-    if (running) return;
+  const changeCellContent = (cellId: string, content: string) => patchCell(cellId, { content });
+
+  const focusCell = (cellId: string) => setActiveCellId(cellId);
+
+  const addCell = async (language: string) => {
+    if (adding) return;
+    if (!online || !session) return; // Add is gated on a live backend.
+    setAdding(true);
+    setLastActivity(`Adding ${language === "cpp" ? "C++" : "Python"} cell…`);
+    try {
+      const created = await createCell({
+        session_id: session.id,
+        cell_type: "code",
+        language,
+        content: starterFor(language),
+      });
+      lastSyncedRef.current.set(created.id, created.content);
+      setCells((cs) => [...cs, toView(created)]);
+      setActiveCellId(created.id);
+      setLastActivity(`Added ${language === "cpp" ? "C++" : "Python"} cell`);
+    } catch (err) {
+      const e = err as ApiError;
+      setLastActivity(`Add cell failed: ${e?.message ?? String(err)}`);
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const runCellNow = async (cellId: string) => {
+    const cell = cells.find((c) => c.id === cellId);
+    if (!cell || cell.running) return;
     if (!online || !session) {
-      setOutput("Backend is offline — start it to run cells on the local engine.");
-      setCellStatus("error");
-      setRunNote(null);
+      patchCell(cellId, {
+        output: "Backend is offline — start it to run cells on the local engine.",
+        status: "error",
+        note: null,
+      });
       setLastActivity("Run blocked — backend offline");
       return;
     }
-    setRunNote(null);
-    setRunning(true);
+    setActiveCellId(cellId);
+    patchCell(cellId, { running: true, note: null });
     setLastActivity("Running cell on the local engine…");
     const controller = new AbortController();
-    runAbortRef.current = controller;
+    runAbortRef.current.set(cellId, controller);
     try {
-      let cellId = serverCellId;
-      if (!cellId) {
-        const created = await createCell({
-          session_id: session.id,
-          cell_type: "code",
-          language: LANGUAGE,
-          content,
-        });
-        cellId = created.id;
-        setServerCellId(cellId);
-        setLastSyncedContent(content);
-      } else if (content !== lastSyncedContent) {
-        await updateCell(cellId, { content });
-        setLastSyncedContent(content);
+      if (cell.content !== lastSyncedRef.current.get(cellId)) {
+        await updateCell(cellId, { content: cell.content });
+        lastSyncedRef.current.set(cellId, cell.content);
       }
       const result = await runCell(cellId, controller.signal);
-      setOutput(result.last_output ?? "");
-      setCellStatus(result.status);
+      patchCell(cellId, { output: result.last_output ?? "", status: result.status });
       setLastActivity(`Cell run · ${result.status}`);
     } catch (err) {
       if ((err as Error)?.name === "AbortError") {
         // Cancellation is surfaced by cancelRun; nothing to do here.
       } else {
         const e = err as ApiError;
-        setOutput(e?.message ?? String(err));
-        setCellStatus("error");
+        patchCell(cellId, { output: e?.message ?? String(err), status: "error" });
         setLastActivity("Cell run failed");
       }
     } finally {
-      setRunning(false);
-      runAbortRef.current = null;
+      runAbortRef.current.delete(cellId);
+      patchCell(cellId, { running: false });
     }
   };
 
-  const cancelRun = () => {
-    runAbortRef.current?.abort();
-    runAbortRef.current = null;
-    setRunning(false);
-    setRunNote("Request cancelled; the server job continues to completion.");
+  const cancelRun = (cellId: string) => {
+    runAbortRef.current.get(cellId)?.abort();
+    runAbortRef.current.delete(cellId);
+    patchCell(cellId, {
+      running: false,
+      note: "Request cancelled; the server job continues to completion.",
+    });
     setLastActivity("Run cancelled (server job continues)");
   };
 
-  const clearCell = () => {
-    setOutput(null);
-    setCellStatus("");
-    setRunNote(null);
-  };
+  const clearCell = (cellId: string) => patchCell(cellId, { output: null, status: "", note: null });
 
   const changeMode = (m: AiMode) => {
     setMode(m);
@@ -219,7 +306,7 @@ export function WorkspaceLayout({ onNavigateHome }: Props) {
     askAbortRef.current = controller;
     const body: AskRequest = {
       session_id: session.id,
-      cell_id: serverCellId,
+      cell_id: activeCellId,
       question,
       mode: "direct",
     };
@@ -277,17 +364,15 @@ export function WorkspaceLayout({ onNavigateHome }: Props) {
             onStatusChange={changeRequirementStatus}
           />
           <NotebookPane
-            cellLabel={CELL_LABEL}
-            language={LANGUAGE}
-            content={content}
-            onChange={setContent}
-            running={running}
-            output={output}
-            status={cellStatus}
-            note={runNote}
+            cells={cells}
+            online={online}
+            adding={adding}
+            onChange={changeCellContent}
             onRun={runCellNow}
             onCancel={cancelRun}
             onClear={clearCell}
+            onFocusCell={focusCell}
+            onAddCell={addCell}
           />
           <CoPilotPane mode={mode} onModeChange={changeMode} thread={thread} busy={aiBusy} onSend={askTutor} />
         </div>

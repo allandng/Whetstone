@@ -84,16 +84,10 @@ export function fetchTimeline(sessionId: string): Promise<SessionTimeline> {
 
 // --- Cells -----------------------------------------------------------------
 
-// TODO(backlog): the backend has no GET /sessions/{id}/cells (or GET /cells)
-// route yet, so a session's existing cells cannot be re-fetched. The notebook
-// seeds a starter cell and keeps cells in local React state instead. Adding
-// that route would let a session picker restore prior cells (see plan answer 3).
-export function listSessionCells(_sessionId: string): Promise<CellRead[]> {
-  return Promise.reject(
-    Object.assign(new Error("listSessionCells: no backend route yet (backlog)"), {
-      status: 501,
-    }) as ApiError,
-  );
+/** List a session's cells in stable order (order_index), each with its last
+ *  output. Lets the notebook restore prior cells and outputs on session open. */
+export function listSessionCells(sessionId: string): Promise<CellRead[]> {
+  return json<CellRead[]>("GET", `/sessions/${enc(sessionId)}/cells`);
 }
 
 export function createCell(body: CellCreate): Promise<CellRead> {
