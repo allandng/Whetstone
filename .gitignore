@@ -15,6 +15,9 @@ env/
 .ruff_cache/
 .mypy_cache/
 *.db
+*.db-shm
+*.db-wal
+*.db-journal
 *.sqlite
 *.sqlite3
 .env
@@ -60,6 +63,15 @@ build/
 cmake-build-*/
 CMakeFiles/
 CMakeCache.txt
+
+# ---------------------------------------------------------------------------
+# Local model files (downloaded, never committed) + dev launcher scratch
+# ---------------------------------------------------------------------------
+/models/*
+!/models/README.md
+*.gguf
+.dev-logs/
+.dev-run/
 
 # ---------------------------------------------------------------------------
 # Editors / OS
