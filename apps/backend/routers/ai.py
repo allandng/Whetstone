@@ -1,10 +1,13 @@
-"""Routes for the AI tutor / co-pilot (Direct mode).
+"""Routes for the AI tutor / co-pilot (Direct and Socratic modes).
 
 Bridges the frontend to the local LLM (:class:`services.llm_client.LLMClient`)
-for the Direct-mode co-pilot features described in SRS §4.3:
+for the co-pilot features described in SRS §4.3:
 
 - ``POST /ai/explain-error`` — plain-language explanation of a cell error.
-- ``POST /ai/ask``           — free-form question, streamed back as SSE.
+- ``POST /ai/ask``           — free-form question, streamed back as SSE; the
+  ``mode`` field selects Direct (answer it) or Socratic (guide with questions
+  and a hint ladder). Both share the same context, streaming, and event log;
+  only the system prompt differs.
 - ``POST /ai/complexity``    — advisory time/space complexity analysis.
 
 Every request is grounded in the session's context (active requirements,
@@ -116,12 +119,12 @@ async def explain_error(
 
 @router.post("/ask")
 async def ask(body: AskRequest, db: DBSession = Depends(get_session)):
-    """Answer a free-form question, streamed as SSE (FR-AI-1)."""
+    """Answer a free-form question, streamed as SSE (FR-AI-1).
 
-    if body.mode == "socratic":
-        raise HTTPException(
-            status_code=501, detail="Socratic mode is not implemented yet."
-        )
+    ``body.mode`` picks the system prompt — Direct answers the question,
+    Socratic guides with questions and a hint ladder (FR-AI-3) — while the
+    grounding context, SSE streaming, and event-log record are shared.
+    """
 
     session = db.get(SessionModel, body.session_id)
     if session is None:
@@ -129,7 +132,7 @@ async def ask(body: AskRequest, db: DBSession = Depends(get_session)):
     cell = _require_cell(db, body.cell_id) if body.cell_id else None
 
     context = _assemble_context(db, body.session_id, cell)
-    messages = _messages(context, body.question)
+    messages = _messages(context, body.question, body.mode)
 
     async def event_stream():
         collected: list[str] = []
@@ -143,7 +146,7 @@ async def ask(body: AskRequest, db: DBSession = Depends(get_session)):
         _record_exchange(
             session_id=body.session_id,
             kind="ask",
-            mode="direct",
+            mode=body.mode,
             question=body.question,
             response="".join(collected),
             cell_id=body.cell_id,
@@ -207,13 +210,33 @@ def _require_cell(db: DBSession, cell_id: uuid.UUID) -> Cell:
     return cell
 
 
-def _system_prompt(context: str) -> str:
+# Mode-specific opening of the system prompt. Everything after this (the
+# academic-integrity rule and the session context) is shared, so the two modes
+# differ only in how the tutor is told to engage — not in their plumbing.
+_DIRECT_ROLE = (
+    "You are Whetstone's local AI co-pilot, operating in DIRECT mode for a "
+    "computer-science student working through an assignment on their own "
+    "machine. Answer accurately and concisely, and show the reasoning behind "
+    "your answer so the student can verify it rather than taking it on faith."
+)
+
+_SOCRATIC_ROLE = (
+    "You are Whetstone's local AI co-pilot, operating in SOCRATIC mode for a "
+    "computer-science student working through an assignment on their own "
+    "machine. Do not hand the student the answer. Instead, guide them with "
+    "probing questions and a graded ladder of hints: open with the smallest "
+    "nudge that could get them unstuck, and only escalate to a more specific "
+    "hint if they remain stuck. Help them reach the solution themselves. Never "
+    "volunteer a complete solution. Only if the student explicitly demands the "
+    "full answer may you provide it — and then you MUST mark it per the "
+    "academic-integrity rule below."
+)
+
+
+def _system_prompt(context: str, mode: str = "direct") -> str:
+    role = _SOCRATIC_ROLE if mode == "socratic" else _DIRECT_ROLE
     return (
-        "You are Whetstone's local AI co-pilot, operating in DIRECT mode for a "
-        "computer-science student working through an assignment on their own "
-        "machine. Answer accurately and concisely, and show the reasoning "
-        "behind your answer so the student can verify it rather than taking it "
-        "on faith.\n\n"
+        f"{role}\n\n"
         "ACADEMIC INTEGRITY RULE: If your reply contains a complete, "
         "copy-pasteable code solution to the student's task, you MUST begin the "
         "reply with this exact line, on its own:\n"
@@ -225,9 +248,9 @@ def _system_prompt(context: str) -> str:
     )
 
 
-def _messages(context: str, user: str) -> list[dict]:
+def _messages(context: str, user: str, mode: str = "direct") -> list[dict]:
     return [
-        {"role": "system", "content": _system_prompt(context)},
+        {"role": "system", "content": _system_prompt(context, mode)},
         {"role": "user", "content": user},
     ]
 
