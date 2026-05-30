@@ -123,18 +123,21 @@ a launcher/env concern, and "what it's called" is a config concern.
 
 Whetstone targets a **Gemma E4B-class** model (the 16 GB-friendly floor; a
 larger Gemma is the recommended upgrade — see [`docs/model-eval.md`](docs/model-eval.md)).
-Download a Gemma GGUF from Hugging Face and drop it at the default path:
+The default is the instruction-tuned **Gemma 4 E4B** GGUF published by the
+llama.cpp team ([`ggml-org/gemma-4-E4B-it-GGUF`](https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF)).
+Download the `Q4_K_M` quant (~5.3 GB — a good size/quality balance) and save it
+at the default path:
 
 ```sh
-# Pick a Gemma E4B GGUF (Q4_K_M is a good size/quality balance) and save it as:
-huggingface-cli download <gemma-e4b-gguf-repo> <file>.gguf \
+huggingface-cli download ggml-org/gemma-4-E4B-it-GGUF gemma-4-E4B-it-Q4_K_M.gguf \
   --local-dir models --local-dir-use-symlinks False
-mv models/<file>.gguf models/gemma-4-e4b.gguf
+mv models/gemma-4-E4B-it-Q4_K_M.gguf models/gemma-4-e4b.gguf
 ```
 
 (Or point `WHETSTONE_GEMMA_GGUF` at wherever you already keep it. llama.cpp's
-`llama-server -hf <repo>` can also fetch on first run, but the launcher wants a
-local file it can preflight, so the documented default is a file in `models/`.)
+`llama-server -hf ggml-org/gemma-4-E4B-it-GGUF:Q4_K_M` can also fetch on first
+run, but the launcher wants a local file it can preflight, so the documented
+default is a file in `models/`.)
 
 **2. Whisper model → `models/ggml-base.bin`** (for `whisper-server`)
 
