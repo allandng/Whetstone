@@ -1,6 +1,6 @@
 CXXFLAGS = -std=c++17 -Wall -Wextra -Wpedantic -g -fPIC -fstack-protector-all -pthread
 LDFLAGS = -pthread
-OBJS = psirver.o utils.o Tasks.o TaskFactory.o Jobs.o
+OBJS = psirver.o utils.o Tasks.o TaskFactory.o Jobs.o Limits.o
 BIN = ./psirver # The main binary
 
 all: $(BIN)
