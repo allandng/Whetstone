@@ -99,9 +99,12 @@ The header should flip to **"Local engine · online"** and the footer to
    it. Offline, it shows a "timeline unavailable while the backend is offline"
    note instead.
 
-6. **Dictate** is a **visual placeholder** — toggling it shows the recording
-   banner, but on-device voice capture isn't wired yet (`POST /ai/transcribe`
-   is a stub).
+6. **Dictate.** Toggle **Dictate** to start recording, speak a short prompt,
+   then toggle again to stop. **Expect:** the recording banner while capturing,
+   then the transcript is dropped into the co-pilot prompt box. On-device
+   capture (MediaRecorder) is POSTed to `/ai/transcribe` and transcribed by
+   whisper-server. Requires whisper-server (started by `make dev`); with STT
+   down the request fails loudly with a 503 rather than silently inserting nothing.
 
 ## Part 2b — Legacy Home + Timeline (Tauri bridge)
 

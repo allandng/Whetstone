@@ -38,7 +38,7 @@ def create_app() -> FastAPI:
 
     settings = get_settings()  # validate configuration early
 
-    app = FastAPI(title="Whetstone Backend", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Whetstone Backend", version="1.0.0", lifespan=lifespan)
 
     # Credentialed access is restricted to the Tauri frontend's origins
     # (configurable via WHETSTONE_CORS_ALLOWED_ORIGINS). A wildcard origin is

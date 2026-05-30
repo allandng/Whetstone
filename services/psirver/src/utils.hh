@@ -4,7 +4,7 @@
 
 // Utility and initialization functions
 void usage(const char* prog);
-int16_t select_port(int argc, char **argv);
+uint16_t select_port(int argc, char **argv);
 void graceful_shutdown(int /*signum*/);
 std::string init_pid_file();
 void add_sigint_handler();

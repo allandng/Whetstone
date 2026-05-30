@@ -10,7 +10,7 @@ backend orchestrates three independent loopback services. Everything binds to
 | Psirver (code exec) | `127.0.0.1:8080` | `psirver_host`, `psirver_port` | C++ job server |
 | FastAPI backend | `127.0.0.1:8000` | `host`, `port` | orchestration + SQLite |
 | Tauri frontend | `localhost:1420` (Vite) | — | desktop window |
-| whisper-server (STT) | `127.0.0.1:8082` | `stt_host`, `stt_port`, `stt_model` | optional; `/ai/transcribe` is still a stub |
+| whisper-server (STT) | `127.0.0.1:8082` | `stt_host`, `stt_port`, `stt_model` | optional; powers co-pilot voice dictation via `/ai/transcribe` |
 
 The defaults in `apps/backend/config.py` already describe this layout, so if
 you start each service on the port in the table above, **no environment
@@ -227,17 +227,19 @@ only stores model *names*, never paths):
 | `WHETSTONE_LLAMA_SERVER` | `llama-server` | llama-server binary (if not on `PATH`) |
 | `WHETSTONE_WHISPER_SERVER` | `whisper-server` | whisper-server binary (if not on `PATH`) |
 | `WHETSTONE_LLAMA_SERVER_ARGS` | `-c 8192 -ngl 99` | extra llama-server flags |
-| `PSIRVER_LIMIT_FSIZE_MB` | `1024` (launcher default) | Psirver per-file cap; see the C++ note below |
+| `PSIRVER_LIMIT_FSIZE_MB` | `1024` (Psirver default) | Psirver per-file cap; see the C++ note below |
 
 See the **README → "Getting the models"** section for how to download the two
 model files into `models/`.
 
-> **C++ cells and the file-size cap.** Psirver's own default `RLIMIT_FSIZE` is
-> 64 MB, which is too tight for `clang++` on macOS — a trivial C++ cell fails
-> with `clang++: error: ... Filesize limit exceeded`. The launcher therefore
-> raises `PSIRVER_LIMIT_FSIZE_MB` to `1024` by default; the CPU and wall-clock
-> caps still contain a genuine runaway. If you run Psirver by hand, export
-> `PSIRVER_LIMIT_FSIZE_MB` yourself (see the Psirver README → Configuration).
+> **C++ cells and the file-size cap.** `clang++` on macOS writes large
+> temporaries mid-compile, so a tight `RLIMIT_FSIZE` makes even a trivial C++
+> cell fail with `clang++: error: ... Filesize limit exceeded`. Psirver
+> therefore defaults `PSIRVER_LIMIT_FSIZE_MB` to `1024` in its own
+> [`Limits.cc`](services/psirver/src/Limits.cc), so this headroom is inherited
+> however you launch it — `make dev`, by hand, or a future bundle. The CPU and
+> wall-clock caps still contain a genuine runaway. If you only run trusted
+> Python you can retighten the cap by exporting a smaller `PSIRVER_LIMIT_FSIZE_MB`.
 
 ## Shutting down
 

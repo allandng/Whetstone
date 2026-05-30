@@ -25,9 +25,13 @@ void usage(const char* prog)
 // Parse command line arguments to find the port number. Library
 // functions used:
 // - std::stoi()
-int16_t select_port(int argc, char **argv)
+uint16_t select_port(int argc, char **argv)
 {
-  int16_t server_port_tmp = DEFAULT_PORT;
+  // Hold the parsed value in a full int: a port is 1-65535, which overflows a
+  // signed 16-bit temp (max 32767), so a high port like 50000 would wrap to a
+  // negative value and be rejected (or silently mis-bound). The range check
+  // below then validates it before the narrowing cast to uint16_t.
+  int server_port_tmp = DEFAULT_PORT;
   if (argc > 2) {		// Too many parameters
     usage(argv[0]);		// No return
   }

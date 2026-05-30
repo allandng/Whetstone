@@ -2,7 +2,7 @@
 
 **A local-first problem-solving environment for CS students. Your code, your reasoning, and an AI tutor - all on your own machine.**
 
-![status](https://img.shields.io/badge/status-in%20development-orange)
+![version](https://img.shields.io/badge/version-1.0-blue)
 ![platform](https://img.shields.io/badge/platform-macOS%20(Apple%20Silicon)-lightgrey)
 ![offline](https://img.shields.io/badge/runs-100%25%20offline-brightgreen)
 
@@ -28,7 +28,7 @@ Whetstone takes the opposite stance. Everything runs offline by default, and the
 
 ## Status
 
-In active development. The requirements are specified (see [`docs/Whetstone_SRS.md`](docs/Whetstone_SRS.md)), and the execution backend, the Direct-mode tutor, and the core workspace UI are in and tested. Current work is the Socratic tutor, voice input, and the remaining UI wiring. This README describes the v1.0 target; the table below reflects what actually runs today.
+v1.0. The requirements are specified (see [`docs/Whetstone_SRS.md`](docs/Whetstone_SRS.md)), and the functional core is in and tested: code execution (Python + C++), the Direct and Socratic tutor modes, spec import with requirement tracking, the session event log, and on-device voice dictation. The release also adds execution hardening, restricted CORS, CI, and a one-command launcher with a macOS bundle. The table below reflects what runs today; the remaining edges are named under [Known limitations](#known-limitations) and [Roadmap](#roadmap).
 
 | Area | State |
 |---|---|
@@ -36,14 +36,17 @@ In active development. The requirements are specified (see [`docs/Whetstone_SRS.
 | Psirver async job system (fork/exec, lifecycle, capture) | Done |
 | Backend API (sessions, cells, spec, timeline) | Done |
 | Cell execution (backend ↔ Psirver, Python + C++) | Done |
-| Notebook UI (run / edit cells) | Working — add-cell + cell-reload pending |
+| Notebook UI (run / edit / add cells, restored on open) | Done |
 | Spec import + requirement tracking | Done |
 | Local LLM co-pilot — Direct mode | Done |
-| Local LLM co-pilot — Socratic mode | Not started |
+| Local LLM co-pilot — Socratic mode | Done |
 | Session event log + timeline endpoint | Done |
-| Timeline replay (step-back UI) | Pending |
-| Voice input (Whisper STT) | Stub |
-| Packaging / one-command run | `make dev` launcher; macOS Tauri bundle (UI shell — services run separately) |
+| Timeline replay (step-back scrubber over the event log) | Done |
+| Voice input (Whisper STT → co-pilot dictation) | Done |
+| Execution hardening (per-job rlimits, fd hygiene, env scrubbing) | Done |
+| Restricted CORS + production error handling | Done |
+| CI (backend + frontend tests) | Done |
+| Packaging / one-command run | `make dev` launcher + macOS Tauri bundle (UI shell — services run separately) |
 
 ## Architecture
 
@@ -64,6 +67,55 @@ flowchart LR
 ```
 
 Code execution runs through **Psirver**, a C++ HTTP server I originally wrote for an Operating Systems course. It uploads scripts, runs them with `fork`/`execvp`, and tracks each run as a job with captured stdout/stderr, status, and termination. Reusing it here gives Whetstone a sandboxed, independently restartable execution engine - and a real answer to "why an HTTP server inside a local app?" (reuse, isolation, and a clean seam if remote execution ever matters).
+
+## Code execution & sandboxing
+
+Whetstone runs user- and AI-suggested code through Psirver, which binds to `127.0.0.1` only and runs each cell as an isolated `fork`/`execvp` job. Because submitted code may be AI-generated, an unguarded child could trivially take down the host with an infinite loop, a runaway allocation, an output flood, or a stray `fork`. The v1.0 security floor (SRS NFR-SEC-1) contains those cases: before `exec()`, each forked child is wrapped as follows.
+
+- **Resource caps** (`setrlimit`): `RLIMIT_CPU` (CPU seconds), `RLIMIT_AS` (virtual address space), `RLIMIT_FSIZE` (max bytes any single file may grow), and `RLIMIT_CORE = 0` (no core dumps from a killed runaway).
+- **Wall-clock deadline**: `RLIMIT_CPU` only catches code that *burns* CPU; a job that sleeps or blocks on I/O would hang forever. A reaper thread enforces a hard wall-clock deadline, reusing the terminate path - `SIGTERM` the job's process group, then `SIGKILL` after a grace window - so a timed-out job surfaces as `TERMINATED` instead of hanging. (The backend's own ~30 s poll ceiling sits *above* this deadline, so Psirver always terminates the job first.)
+- **Private working directory**: the child `chdir`s into a per-job scratch dir (`jobs/<id>/`); the compiled C++ binary and any stray writes land there, and `HOME`/`TMPDIR` point at it.
+- **Minimal environment**: the child does *not* inherit the server's environment (which may hold secrets/tokens). It is handed only `PATH` (so `execvp` can find `python3`/`clang++`), `HOME`, `TMPDIR`, and a few `LANG`/`PYTHON*` hints. (On macOS the system re-injects a non-sensitive `__CF_USER_TEXT_ENCODING` locale hint; that is expected and harmless.)
+- **File-descriptor hygiene**: `stdin` is redirected from `/dev/null`, `stdout`/`stderr` go to per-job capture files, and every other inherited descriptor (the listening socket, the request's client socket) is closed so the job cannot reach the server's fds.
+- **Own process group**: each job is its own process group leader, so the whole subtree - including a fork-bomb attempt or the C++ compile/run pair - is killed as a unit (`kill(-pgid, ...)`). This is what makes a multi-process runaway *reliably* killable.
+
+### Configurable limits
+
+Defaults suit a single-file Python/C++ assignment and can be overridden at startup via environment variables:
+
+| Variable | Default | Meaning |
+| -------- | ------- | ------- |
+| `PSIRVER_LIMIT_CPU_SECONDS` | `10` | `RLIMIT_CPU` soft+hard cap |
+| `PSIRVER_LIMIT_AS_MB` | `2048` | `RLIMIT_AS` (virtual memory); `0` disables |
+| `PSIRVER_LIMIT_FSIZE_MB` | `64` | `RLIMIT_FSIZE` per-file cap |
+| `PSIRVER_LIMIT_WALL_SECONDS` | `15` | reaper wall-clock deadline; `0` disables |
+| `PSIRVER_LIMIT_KILL_GRACE_SECONDS` | `3` | `SIGTERM` -> `SIGKILL` escalation window |
+
+The `RLIMIT_AS` default is deliberately generous: clang++ and language runtimes *reserve* large virtual ranges they never touch, so too tight a cap fails legitimate work. 2 GiB lets a normal compile/run through while still catching a genuine multi-GB allocation. **Caveat:** `RLIMIT_AS` is enforced on Linux (the realistic deployment) but is effectively a *no-op on macOS* - there the wall-clock deadline is the cross-platform backstop that contains a memory runaway. There is no `RLIMIT_NPROC` cap because it is a per-real-user absolute count that would break a normal multi-process desktop; fork containment instead comes from process-group `SIGKILL` (and, on Linux, cgroup `pids.max` is the proper knob if stricter isolation is ever required).
+
+### Threat model
+
+This is a **local, single-user** application: Psirver binds `127.0.0.1` only, and the only client is the Whetstone backend on the same machine. The goal of these limits is to **contain runaway or accidentally-abusive code** - a student (or an AI suggestion) producing an infinite loop, a memory hog, an output flood, or an unintended `fork` - so a bad cell degrades into a `FAILED` / `TERMINATED` job instead of taking down the host.
+
+The limits are **explicitly not** a security sandbox against a *determined local attacker who already controls the machine*. Such an attacker has the user's own privileges and can bypass these process-level caps; defending against them is a non-goal at v1.0. Stated plainly so the limits are not mistaken for more than they are.
+
+**Out of scope (v1.0):**
+
+- **Filesystem isolation.** The job runs as the same user and can read files that user can read; the scratch `chdir` and minimal env reduce accidental blast radius but are not a chroot/jail. (Future: a `chroot`/container or a dedicated low-privilege `psirver` user.)
+- **Network isolation.** A job may open outbound sockets. (Future: a network namespace or seccomp filter on Linux.)
+- **Syscall filtering.** No seccomp-bpf allowlist; a job may invoke any syscall available to the user.
+- **Privilege separation.** Psirver runs as the invoking user, not a dedicated unprivileged account.
+- **Defeating a determined local attacker**, side channels, or hardening of the HTTP parser beyond existing bounds.
+- **`RLIMIT_AS` on macOS** (no-op; see the caveat above).
+
+### Verifying containment
+
+`services/psirver/src/limits_demo.sh` builds Psirver, launches it with deliberately tight limits, and submits a battery of abusive jobs (CPU loop, output flood, memory hog, blocking sleep, fork tree, plus normal Python/C++ jobs as no-false-positive controls), asserting each is contained:
+
+```sh
+cd services/psirver/src
+./limits_demo.sh   # prints PASS/FAIL per case, exits non-zero on any failure
+```
 
 ## Tech stack
 
@@ -123,18 +175,21 @@ a launcher/env concern, and "what it's called" is a config concern.
 
 Whetstone targets a **Gemma E4B-class** model (the 16 GB-friendly floor; a
 larger Gemma is the recommended upgrade — see [`docs/model-eval.md`](docs/model-eval.md)).
-Download a Gemma GGUF from Hugging Face and drop it at the default path:
+The default is the instruction-tuned **Gemma 4 E4B** GGUF published by the
+llama.cpp team ([`ggml-org/gemma-4-E4B-it-GGUF`](https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF)).
+Download the `Q4_K_M` quant (~5.3 GB — a good size/quality balance) and save it
+at the default path:
 
 ```sh
-# Pick a Gemma E4B GGUF (Q4_K_M is a good size/quality balance) and save it as:
-huggingface-cli download <gemma-e4b-gguf-repo> <file>.gguf \
+huggingface-cli download ggml-org/gemma-4-E4B-it-GGUF gemma-4-E4B-it-Q4_K_M.gguf \
   --local-dir models --local-dir-use-symlinks False
-mv models/<file>.gguf models/gemma-4-e4b.gguf
+mv models/gemma-4-E4B-it-Q4_K_M.gguf models/gemma-4-e4b.gguf
 ```
 
 (Or point `WHETSTONE_GEMMA_GGUF` at wherever you already keep it. llama.cpp's
-`llama-server -hf <repo>` can also fetch on first run, but the launcher wants a
-local file it can preflight, so the documented default is a file in `models/`.)
+`llama-server -hf ggml-org/gemma-4-E4B-it-GGUF:Q4_K_M` can also fetch on first
+run, but the launcher wants a local file it can preflight, so the documented
+default is a file in `models/`.)
 
 **2. Whisper model → `models/ggml-base.bin`** (for `whisper-server`)
 
@@ -196,13 +251,15 @@ whetstone/
 │   └── backend/            # FastAPI backend
 │       ├── main.py         # app factory, mounts routers
 │       ├── db.py           # SQLite engine + session factory (SQLModel)
-│       ├── models.py       # SQLModel table stubs
+│       ├── models.py       # SQLModel tables (Session, Cell, Spec, Event, …)
 │       ├── config.py       # pydantic-settings configuration
 │       ├── routers/        # sessions, cells, ai, spec
-│       └── services/       # psirver / llm / stt HTTP client stubs
+│       └── services/       # psirver / llm / stt / spec HTTP clients
 ├── services/
-│   └── psirver/            # C++ code-execution backend (placeholder)
+│   └── psirver/            # C++ code-execution service (fork/exec job runner)
+├── scripts/                # dev.sh — one-command local launcher
 ├── docs/                   # SRS and design docs
+├── Makefile                # make dev / make bundle
 └── README.md
 ```
 
@@ -218,21 +275,61 @@ Psirver, llama-server, and whisper-server over loopback (see
 
 ## Roadmap
 
-The build order, roughly:
+**Shipped in v1.0**
 
-1. Finish the Psirver async job system (the execution spine).
-2. Notebook and cell execution wired to Psirver.
-3. Local LLM co-pilot in direct mode.
-4. Spec parsing and requirement tracking.
-5. Session event log and timeline replay.
-6. Socratic mode and voice input.
-7. Stretch: session branching, suite interop, export polish, sandbox hardening.
+- Psirver async job system (the execution spine) with Python + C++ cell execution.
+- Notebook workspace: run, edit, and add cells; cells restored when a session opens.
+- Spec import → tracked requirement checklist.
+- On-device LLM co-pilot in both Direct and Socratic modes.
+- Session event log + timeline endpoint, with a step-back replay scrubber that
+  reconstructs session state at any point (view-only — it never re-runs code).
+- On-device voice dictation into the co-pilot prompt (Whisper).
+- Execution hardening (per-job rlimits, fd hygiene, environment scrubbing),
+  restricted CORS with loud-failure error handling, CI for backend and frontend,
+  and a one-command dev launcher plus a macOS Tauri bundle.
+
+**Future / stretch**
+
+- Moving the academic-integrity marker guarantee server-side so it no longer
+  depends on a small model emitting it (see [`docs/model-eval.md`](docs/model-eval.md) §B).
+- Bundling the backend and model servers as Tauri sidecars so the app is a single launch.
+- Session branching, suite interop (LoomAssist / Chalkmark), and export polish.
+- Sandbox hardening beyond the v1.0 security floor.
 
 See the [SRS](docs/Whetstone_SRS.md) for the full requirements, diagrams, and design decisions.
 
+## Known limitations
+
+v1.0 ships a complete core. These are the edges it knowingly leaves for later —
+named here on purpose rather than hidden:
+
+- **The co-pilot mode resets to Direct on a full reload.** Direct/Socratic is
+  in-memory UI state; a full page reload (browser dev mode, or a webview reload)
+  drops back to Direct rather than restoring the last-used mode.
+- **The academic-integrity marker is best-effort on a small model.** When the
+  tutor hands over a full solution it is asked to prepend a
+  `[FULL SOLUTION …]` banner, but a small on-device model emits that marker only
+  unreliably. v1.0 leans on the always-on "verify this" framing instead of
+  guaranteeing the banner; making the guarantee server-side is a documented
+  follow-up (see [`docs/model-eval.md`](docs/model-eval.md) §B).
+- **The workspace breadcrumb is a cosmetic label.** The header always reads
+  `scratchpad.cpp` regardless of whether the active cell is Python or C++ — it
+  is a brand-style breadcrumb, not the real per-cell filename.
+- **The bundle ships the UI shell only.** The macOS bundle packages the desktop
+  UI; the backend and the three model/exec services are launched separately via
+  `make dev`. Sidecar packaging is post-v1.
+- **Model-quality numbers are provisional.** The model-eval harness is in place,
+  but the empirical scores (complexity reliability, marker miss-rate) have not
+  been run against a live model, so the "E4B floor / larger-Gemma recommended"
+  guidance is a reasoned default, not a measured one
+  (see [`docs/model-eval.md`](docs/model-eval.md)).
+
 ## License
 
-To be determined.
+Whetstone is released under the **[Apache License 2.0](LICENSE)**.
+
+`services/psirver/` originated as an Operating Systems course project and is
+included here under the same license.
 
 ---
 
