@@ -277,7 +277,10 @@ named here on purpose rather than hidden:
 
 ## License
 
-To be determined.
+Whetstone is released under the **[Apache License 2.0](LICENSE)**.
+
+`services/psirver/` originated as an Operating Systems course project and is
+included here under the same license.
 
 ---
 
