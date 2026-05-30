@@ -28,17 +28,22 @@ Whetstone takes the opposite stance. Everything runs offline by default, and the
 
 ## Status
 
-In active development. The requirements are specified (see [`docs/Whetstone_SRS.md`](docs/Whetstone_SRS.md)) and the current work is the execution backend. This README describes the v1.0 target; not everything below runs yet.
+In active development. The requirements are specified (see [`docs/Whetstone_SRS.md`](docs/Whetstone_SRS.md)), and the execution backend, the Direct-mode tutor, and the core workspace UI are in and tested. Current work is the Socratic tutor, voice input, and the remaining UI wiring. This README describes the v1.0 target; the table below reflects what actually runs today.
 
 | Area | State |
 |---|---|
 | Software Requirements Spec | Done |
-| Psirver job system (async exec) | In progress |
-| Notebook + cell execution | In progress |
-| Local LLM co-pilot | In progress |
-| Spec parsing + tracking | In progress |
-| Session timeline + replay | In progress |
-| Socratic mode, voice input | Planned |
+| Psirver async job system (fork/exec, lifecycle, capture) | Done |
+| Backend API (sessions, cells, spec, timeline) | Done |
+| Cell execution (backend ↔ Psirver, Python + C++) | Done |
+| Notebook UI (run / edit cells) | Working — add-cell + cell-reload pending |
+| Spec import + requirement tracking | Done |
+| Local LLM co-pilot — Direct mode | Done |
+| Local LLM co-pilot — Socratic mode | Not started |
+| Session event log + timeline endpoint | Done |
+| Timeline replay (step-back UI) | Pending |
+| Voice input (Whisper STT) | Stub |
+| Packaging / one-command run | Not started |
 
 ## Architecture
 
