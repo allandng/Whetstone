@@ -57,6 +57,9 @@ export type SessionTimeline = {
   session_id: string;
   events: TimelineEvent[];
   groups: Record<string, TimelineEvent[]>;
+  // The session's current checklist; replay pairs it with requirement_status
+  // events to reconstruct each item's check-off state at a past point.
+  requirements: RequirementItemRead[];
 };
 
 // --- Write-side request models (schemas.py) --------------------------------
