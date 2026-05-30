@@ -148,7 +148,8 @@ function asStatus(value: string | undefined): RequirementStatus | undefined {
 }
 
 // Reconstruct the workspace as it stood right after events[0..cursor].
-function reconstructAt(
+// Exported for unit testing: it is the pure core of timeline replay.
+export function reconstructAt(
   events: TimelineEvent[],
   baselineCells: CellRead[],
   baselineRequirements: RequirementItemRead[],
