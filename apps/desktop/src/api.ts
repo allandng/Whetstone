@@ -152,10 +152,11 @@ export type AskStreamHandlers = {
   onError?: (message: string) => void;
 };
 
-/** Stream a Direct-mode answer from POST /ai/ask (Server-Sent Events).
- *  Socratic mode is not implemented server-side (returns 501) — the UI does
- *  not call this in Socratic mode. Throws an ApiError on a non-OK response;
- *  network failures (backend down) reject so callers can degrade gracefully. */
+/** Stream a tutor reply from POST /ai/ask (Server-Sent Events). The reply's
+ *  style follows body.mode — Direct answers, Socratic guides with questions and
+ *  a hint ladder — but the stream shape is identical. Throws an ApiError on a
+ *  non-OK response; network failures (backend down) reject so callers can
+ *  degrade gracefully. */
 export async function askStream(
   body: AskRequest,
   handlers: AskStreamHandlers,

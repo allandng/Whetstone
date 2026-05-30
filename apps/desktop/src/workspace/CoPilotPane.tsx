@@ -63,7 +63,7 @@ export function CoPilotPane({ mode, onModeChange, thread, busy, onSend }: Props)
 
   const submit = () => {
     const q = draft.trim();
-    if (!q || socratic || busy) return;
+    if (!q || busy) return;
     onSend(q);
     setDraft("");
   };
@@ -119,23 +119,11 @@ export function CoPilotPane({ mode, onModeChange, thread, busy, onSend }: Props)
           socratic ? "bg-amber-950/[0.04]" : "bg-sky-950/[0.04]"
         }`}
       >
-        {socratic && (
-          <div className="rounded border border-amber-900/50 bg-amber-950/20 p-3 text-[11.5px] text-amber-200/90 leading-relaxed">
-            <div className="flex items-center gap-1.5 font-semibold text-amber-300 mb-1">
-              <I.Alert size={12} /> Socratic mode not yet wired
-            </div>
-            <p>
-              The backend returns <span className="font-mono">501</span> for Socratic asks (
-              <span className="font-mono">POST /ai/ask</span>, mode=socratic). It's a scoped roadmap item — switch to{" "}
-              <span className="font-semibold">Direct Help</span> to ask a question now.
-            </p>
-          </div>
-        )}
-
-        {!socratic && thread.length === 0 && (
+        {thread.length === 0 && (
           <p className="text-[12px] text-zinc-500 leading-relaxed">
-            Ask the local co-pilot about your code or the tracked requirements. Answers stream from the on-device model
-            and are grounded in this session.
+            {socratic
+              ? "Ask the local co-pilot about your code or the tracked requirements. In Socratic mode it replies with guiding questions and graded hints rather than the full answer — on-device and grounded in this session."
+              : "Ask the local co-pilot about your code or the tracked requirements. Answers stream from the on-device model and are grounded in this session."}
           </p>
         )}
 
@@ -152,7 +140,7 @@ export function CoPilotPane({ mode, onModeChange, thread, busy, onSend }: Props)
           ),
         )}
 
-        {!socratic && thread.length > 0 && (
+        {thread.length > 0 && (
           <div className="rounded border border-zinc-900 bg-zinc-900/30">
             <button
               type="button"
@@ -165,7 +153,7 @@ export function CoPilotPane({ mode, onModeChange, thread, busy, onSend }: Props)
             </button>
             {thinkingOpen && (
               <div className="px-2.5 pb-2.5 pt-0.5 text-[10.5px] font-mono text-zinc-500 leading-relaxed border-t border-zinc-900">
-                Direct mode streams the answer as it is generated. The local model's separate chain-of-thought isn't
+                The tutor streams its reply as it is generated. The local model's separate chain-of-thought isn't
                 exposed by <span className="font-mono">/ai/ask</span>, so only the final reply is shown here.
               </div>
             )}
@@ -182,21 +170,19 @@ export function CoPilotPane({ mode, onModeChange, thread, busy, onSend }: Props)
           <input
             type="text"
             aria-label="Ask the tutor a question"
-            disabled={socratic || busy}
+            disabled={busy}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") submit();
             }}
-            placeholder={
-              socratic ? "Socratic mode is not available yet…" : busy ? "Waiting for the tutor…" : "Ask the tutor anything…"
-            }
+            placeholder={busy ? "Waiting for the tutor…" : "Ask the tutor anything…"}
             className="flex-1 bg-transparent border-0 text-[12px] text-zinc-200 placeholder-zinc-600 focus:outline-none disabled:cursor-not-allowed"
           />
           <button
             type="button"
             onClick={submit}
-            disabled={socratic || busy || !draft.trim()}
+            disabled={busy || !draft.trim()}
             aria-label="Send message"
             className="p-1 text-zinc-500 hover:text-zinc-200 transition-colors duration-150 disabled:opacity-40 disabled:hover:text-zinc-500"
           >
