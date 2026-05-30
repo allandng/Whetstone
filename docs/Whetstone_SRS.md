@@ -285,7 +285,7 @@ Each requirement has a unique ID and a priority: **(H)** High / must-have for v1
 ### 5.2 Privacy and Security
 
 - **NFR-PRIV-1 (H):** No user code, spec content, notes, voice data, or AI prompt shall leave the device under the default configuration.
-- **NFR-SEC-1 (H):** User and AI-suggested code shall be executed by Psirver in a sandboxed environment with restricted filesystem and network access; the v1.0 baseline includes read-only locking of stored scripts, with resource limits and stronger isolation (e.g., namespaces/seccomp) as planned hardening.
+- **NFR-SEC-1 (H):** User and AI-suggested code shall be executed by Psirver in a sandboxed environment with restricted filesystem and network access; the v1.0 baseline includes read-only locking of stored scripts, with resource limits and stronger isolation (e.g., namespaces/seccomp) as planned hardening. (See the README's *Code execution & sandboxing* section for the operational threat model, the configurable `PSIRVER_LIMIT_*` limits, and the documented v1.0 boundaries.)
 - **NFR-SEC-2 (H):** The application shall warn the user before executing any code that the AI has generated, distinguishing it from code the user wrote.
 - **NFR-SEC-3 (H):** Psirver shall bind only to the loopback interface and shall reject connections from non-local addresses.
 - **NFR-PRIV-2 (M):** Local session data shall be stored in a location under the user's control, and the user shall be able to delete any session permanently.
