@@ -3,6 +3,7 @@
 #include <syslog.h>
 #include <algorithm>
 #include <fcntl.h>
+#include <limits.h>
 #include <sys/stat.h>
 #include <fstream>
 #include <memory>
@@ -12,9 +13,15 @@
 #include "Tasks.hh"
 #include "utils.hh"
 #include "Jobs.hh"
+#include "Limits.hh"
 #include "json.hpp"
 #include <sys/types.h>
 #include <unistd.h>
+
+// The child replaces its environment with a minimal allowlist before exec();
+// execvp() reads this global both to locate the binary (via PATH) and to pass
+// the environment to the new program.
+extern char **environ;
 
 static std::vector<std::unique_ptr<Script>> scripts;
 
@@ -401,10 +408,51 @@ int RunTask::execute()
   // Build everything the child needs *before* forking. After fork() in a
   // multithreaded process only async-signal-safe work is permitted, so we
   // allocate no std::strings past this point in the child.
-  const std::string out_path = job.stdout_path;
-  const std::string err_path = job.stderr_path;
-  const std::string bin_path =
-    std::string(JOBS_PATH) + std::to_string(job_id) + ".bin";
+
+  // Resolve the per-job resource limits here (getenv() is not safe post-fork).
+  const JobLimits &limits = job_limits();
+
+  // The child chdir()s into a private scratch directory, so every path it
+  // touches must be absolute. PSIRVER_HOME is the server's cwd.
+  char cwd[PATH_MAX];
+  if (::getcwd(cwd, sizeof(cwd)) == nullptr) {
+    syslog(LOG_ERR, "getcwd: %s", strerror(errno));
+    reply(client, "HTTP/1.1 500 Internal Server Error",
+          "Internal Server Error");
+    return 1;
+  }
+  const std::string home = cwd;
+
+  // Capture files stay where JobStatusTask expects them; the compiled binary
+  // and the job's working directory live inside a private scratch dir.
+  const std::string abs_script = home + "/" + script_filename;
+  const std::string abs_out    = home + "/" + job.stdout_path;
+  const std::string abs_err    = home + "/" + job.stderr_path;
+  const std::string scratch    = home + "/" + JOBS_PATH + std::to_string(job_id);
+  const std::string bin_path   = scratch + "/a.out";
+
+  ::mkdir(scratch.c_str(), S_IRWXU); // best effort; EEXIST is fine
+
+  // Minimal child environment: drop the server's environment (which may hold
+  // secrets/tokens) and expose only what python3 / clang++ need. PATH must
+  // survive so execvp() can still locate the interpreter / compiler; HOME and
+  // TMPDIR point at the scratch dir so any stray writes stay contained.
+  const char *parent_path = ::getenv("PATH");
+  std::vector<std::string> env_storage = {
+    std::string("PATH=") +
+      (parent_path && *parent_path ? parent_path : "/usr/bin:/bin:/usr/local/bin"),
+    "HOME=" + scratch,
+    "TMPDIR=" + scratch,
+    "LANG=en_US.UTF-8",
+    "PYTHONUNBUFFERED=1",
+    "PYTHONIOENCODING=utf-8",
+    "PYTHONDONTWRITEBYTECODE=1",
+  };
+  std::vector<char *> env_vec;
+  for (auto &s : env_storage) {
+    env_vec.push_back(const_cast<char *>(s.c_str()));
+  }
+  env_vec.push_back(nullptr);
 
   // argv for the program to run (Python interpreter, or the compiled binary).
   std::vector<std::string> argv_storage;
@@ -412,7 +460,7 @@ int RunTask::execute()
     argv_storage.push_back(bin_path);
   } else {
     argv_storage.push_back("python3");
-    argv_storage.push_back(script_filename);
+    argv_storage.push_back(abs_script);
   }
   for (const auto &a : args) {
     argv_storage.push_back(a);
@@ -425,7 +473,7 @@ int RunTask::execute()
 
   // argv for the C++ compile step: clang++ -x c++ -O0 -o <bin> <src>
   std::vector<std::string> cc_storage = {
-    "clang++", "-x", "c++", "-O0", "-o", bin_path, script_filename};
+    "clang++", "-x", "c++", "-O0", "-o", bin_path, abs_script};
   std::vector<char *> cc_vec;
   for (auto &s : cc_storage) {
     cc_vec.push_back(const_cast<char *>(s.c_str()));
@@ -442,17 +490,43 @@ int RunTask::execute()
 
   if (child == 0) {
     // ---- child ----
+    // Put the job in its own process group (== this pid) so the entire subtree
+    // -- a fork-bomb attempt, or the C++ compile/run pair -- can be killed as a
+    // unit. The parent makes the same call to close the setpgid/exec race.
+    ::setpgid(0, 0);
+
+    int null_fd = ::open("/dev/null", O_RDONLY);
     int out_fd =
-      ::open(out_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+      ::open(abs_out.c_str(), O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
     int err_fd =
-      ::open(err_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
-    if (out_fd < 0 || err_fd < 0) {
+      ::open(abs_err.c_str(), O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+    if (null_fd < 0 || out_fd < 0 || err_fd < 0) {
       _exit(127);
     }
+    ::dup2(null_fd, STDIN_FILENO);
     ::dup2(out_fd, STDOUT_FILENO);
     ::dup2(err_fd, STDERR_FILENO);
-    ::close(out_fd);
-    ::close(err_fd);
+    // Close every other inherited descriptor (the listening socket, this
+    // request's client socket, and the dup source fds) so the job cannot reach
+    // the server's file descriptors. Walk up to the process's actual fd limit
+    // so a client socket with a high number cannot slip through.
+    struct rlimit nofile;
+    int max_fd = 256;
+    if (::getrlimit(RLIMIT_NOFILE, &nofile) == 0 &&
+        nofile.rlim_cur != RLIM_INFINITY && nofile.rlim_cur > 0) {
+      max_fd = static_cast<int>(nofile.rlim_cur);
+    }
+    for (int fd = 3; fd < max_fd; ++fd) {
+      ::close(fd);
+    }
+
+    // Hand over the minimal environment and confine the working directory to
+    // the per-job scratch area before applying the resource caps.
+    environ = env_vec.data();
+    if (::chdir(scratch.c_str()) != 0) {
+      _exit(127);
+    }
+    apply_rlimits(limits);
 
     if (is_cpp) {
       // Compile first; compiler diagnostics land in the captured stderr.
@@ -483,6 +557,9 @@ int RunTask::execute()
   }
 
   // ---- parent ---- (does NOT waitpid here; the reaper does)
+  // Mirror the child's setpgid() so the job's process group exists no matter
+  // which of parent/child runs first; harmless if the child already did it.
+  ::setpgid(child, child);
   job_manager.set_running(job_id, child);
 
   const std::string body = "{\"job_id\":" + std::to_string(job_id) + "}";
