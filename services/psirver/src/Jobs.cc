@@ -1,12 +1,14 @@
 #include "Jobs.hh"
 
 #include <cerrno>
+#include <chrono>
 #include <csignal>
 #include <ctime>
 #include <string>
 #include <sys/stat.h>
 #include <sys/wait.h>
 
+#include "Limits.hh"
 #include "utils.hh"
 
 JobManager job_manager;
@@ -60,6 +62,7 @@ void JobManager::set_running(int job_id, pid_t pid)
 
   it->second.pid = pid;
   it->second.status = JobStatus::Running;
+  it->second.started_at = std::chrono::steady_clock::now();
 
   // The child may have exited before we got here; apply any buffered status.
   auto pe = pending_exits_.find(pid);
@@ -89,9 +92,13 @@ bool JobManager::request_terminate(int job_id)
   }
 
   Job &job = it->second;
-  if (job.status == JobStatus::Running && job.pid > 0) {
+  if (job.status == JobStatus::Running && job.pid > 0 && !job.sigterm_at) {
     job.termination_requested = true;
-    ::kill(job.pid, SIGTERM);
+    job.sigterm_at = std::chrono::steady_clock::now();
+    // Signal the whole process group (the child is its group leader) so a
+    // multi-process job -- a fork-bomb attempt, or the C++ compile/run pair --
+    // dies as a unit. The reaper escalates to SIGKILL if SIGTERM is ignored.
+    ::kill(-job.pid, SIGTERM);
   }
   return true;
 }
@@ -139,16 +146,61 @@ void JobManager::apply_status_locked(Job &job, int wait_status)
   }
 }
 
+// Enforce per-job wall-clock deadlines and push pending terminations through
+// to SIGKILL. Called once per reaper tick with mu_ held.
+//
+// setrlimit(RLIMIT_CPU) only catches a job that burns CPU; a job that sleeps or
+// blocks on I/O would otherwise hang forever. The wall-clock deadline here is
+// the backstop, and it reuses the same terminate path (SIGTERM the group, then
+// SIGKILL after a grace window) so a timed-out job surfaces as TERMINATED.
+void JobManager::enforce_limits_locked()
+{
+  const JobLimits &lim = job_limits();
+  const auto now = std::chrono::steady_clock::now();
+
+  for (auto &kv : jobs_) {
+    Job &job = kv.second;
+    if (job.status != JobStatus::Running || job.pid <= 0) {
+      continue;
+    }
+
+    if (job.sigterm_at) {
+      // Already asked to stop. Escalate to SIGKILL once the grace window has
+      // elapsed -- this is what makes a SIGTERM-ignoring process or a job that
+      // keeps re-forking reliably killable.
+      if (now - *job.sigterm_at >=
+          std::chrono::seconds(lim.kill_grace_seconds)) {
+        ::kill(-job.pid, SIGKILL);
+      }
+      continue;
+    }
+
+    if (lim.wall_seconds > 0 &&
+        now - job.started_at >= std::chrono::seconds(lim.wall_seconds)) {
+      job.termination_requested = true;
+      job.timed_out = true;
+      job.sigterm_at = now;
+      ::kill(-job.pid, SIGTERM);
+    }
+  }
+}
+
 void JobManager::reaper_loop()
 {
   while (running_.load()) {
+    // Reap every child that has already exited.
     int wait_status;
-    pid_t pid = ::waitpid(-1, &wait_status, WNOHANG);
-    if (pid > 0) {
+    pid_t pid;
+    while ((pid = ::waitpid(-1, &wait_status, WNOHANG)) > 0) {
       on_child_exit(pid, wait_status);
-      continue; // drain remaining exits before sleeping
     }
-    // No child ready (pid == 0) or none exist yet (ECHILD): poll politely.
+
+    // Enforce wall-clock deadlines and escalate pending terminations.
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      enforce_limits_locked();
+    }
+
     struct timespec ts{0, 50L * 1000L * 1000L}; // 50 ms
     ::nanosleep(&ts, nullptr);
   }

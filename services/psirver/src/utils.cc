@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <iostream>
 #include <syslog.h>
+#include <unistd.h> // chdir, getpid, write, close
 
 #include "utils.hh"
 
