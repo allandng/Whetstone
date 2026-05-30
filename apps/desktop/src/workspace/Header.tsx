@@ -1,7 +1,10 @@
 import { I } from "./icons";
 
+/** Voice dictation lifecycle: idle → recording → transcribing → idle. */
+export type VoiceState = "idle" | "recording" | "transcribing";
+
 type Props = {
-  recording: boolean;
+  voiceState: VoiceState;
   onToggleRecording: () => void;
   /** Returns to the legacy Home view; the brand and the cog both use it. */
   onNavigateHome: () => void;
@@ -10,7 +13,9 @@ type Props = {
   breadcrumb: { project: string; file: string };
 };
 
-export function Header({ recording, onToggleRecording, onNavigateHome, online, breadcrumb }: Props) {
+export function Header({ voiceState, onToggleRecording, onNavigateHome, online, breadcrumb }: Props) {
+  const recording = voiceState === "recording";
+  const transcribing = voiceState === "transcribing";
   return (
     <header className="h-11 shrink-0 border-b border-zinc-900 bg-zinc-950 flex items-center justify-between px-4 select-none">
       <div className="flex items-center gap-3">
@@ -49,15 +54,22 @@ export function Header({ recording, onToggleRecording, onNavigateHome, online, b
           type="button"
           onClick={onToggleRecording}
           aria-pressed={recording}
-          aria-label={recording ? "Stop voice dictation (placeholder)" : "Start voice dictation (placeholder)"}
-          title="Voice capture is not wired yet — visual placeholder only"
-          className={`h-7 px-2.5 rounded flex items-center gap-2 border font-medium text-[11px] transition-all duration-200 ${
+          disabled={transcribing}
+          aria-label={recording ? "Stop dictation and transcribe" : "Start voice dictation"}
+          title={
+            online
+              ? "Dictate into the co-pilot prompt — on-device transcription"
+              : "Backend offline — voice needs the local engine"
+          }
+          className={`h-7 px-2.5 rounded flex items-center gap-2 border font-medium text-[11px] transition-all duration-200 disabled:cursor-not-allowed ${
             recording
               ? "bg-red-950/30 border-red-800 text-red-300"
-              : "bg-zinc-900 border-zinc-800 text-zinc-300 hover:text-zinc-100 hover:border-zinc-700"
+              : transcribing
+                ? "bg-sky-950/30 border-sky-800 text-sky-300"
+                : "bg-zinc-900 border-zinc-800 text-zinc-300 hover:text-zinc-100 hover:border-zinc-700"
           }`}
         >
-          <I.Mic size={12} className={recording ? "text-red-400" : ""} />
+          <I.Mic size={12} className={recording ? "text-red-400" : transcribing ? "text-sky-400" : ""} />
           {recording ? (
             <span className="flex items-center gap-2">
               <span className="flex items-end gap-[2px] h-3" aria-hidden>
@@ -70,6 +82,11 @@ export function Header({ recording, onToggleRecording, onNavigateHome, online, b
                 ))}
               </span>
               <span>Recording</span>
+            </span>
+          ) : transcribing ? (
+            <span className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-sky-400 pulse-dot" aria-hidden />
+              <span>Transcribing…</span>
             </span>
           ) : (
             <span>Dictate</span>

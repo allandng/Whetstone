@@ -10,11 +10,12 @@ import {
   updateCell,
   updateRequirement,
   askStream,
+  transcribeAudio,
   type ApiError,
   type CellRead,
 } from "../api";
 import type { AiMode, AskRequest, RequirementItemRead, RequirementStatus, SessionRead } from "../types";
-import { Header } from "./Header";
+import { Header, type VoiceState } from "./Header";
 import { RequirementsPane } from "./RequirementsPane";
 import { NotebookPane, type NotebookCell } from "./NotebookPane";
 import { CoPilotPane, type ChatMessage } from "./CoPilotPane";
@@ -89,9 +90,15 @@ export function WorkspaceLayout({ onNavigateHome }: Props) {
   const [reqLoading, setReqLoading] = useState(false);
 
   const [mode, setMode] = useState<AiMode>("direct");
-  const [recording, setRecording] = useState(false);
+  const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [lastActivity, setLastActivity] = useState<string | null>(null);
+
+  // Voice dictation: capture audio with MediaRecorder, then POST it to
+  // /ai/transcribe and drop the transcript into the co-pilot prompt.
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
   // Notebook cells, in display order.
   const [cells, setCells] = useState<NotebookCell[]>([]);
@@ -107,6 +114,8 @@ export function WorkspaceLayout({ onNavigateHome }: Props) {
   // Co-pilot.
   const [thread, setThread] = useState<ChatMessage[]>([]);
   const [aiBusy, setAiBusy] = useState(false);
+  // Prompt draft is owned here (not in CoPilotPane) so dictation can inject into it.
+  const [draft, setDraft] = useState("");
 
   const askAbortRef = useRef<AbortController | null>(null);
 
@@ -337,21 +346,119 @@ export function WorkspaceLayout({ onNavigateHome }: Props) {
     });
   };
 
+  // --- Voice dictation -----------------------------------------------------
+
+  const startRecording = async () => {
+    if (!online || !session) {
+      setLastActivity("Voice blocked — backend offline");
+      return;
+    }
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      setLastActivity("Microphone unavailable — check permissions");
+      return;
+    }
+    mediaStreamRef.current = stream;
+    audioChunksRef.current = [];
+    const recorder = new MediaRecorder(stream);
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) audioChunksRef.current.push(e.data);
+    };
+    recorder.onstop = () => {
+      void finishRecording(recorder.mimeType);
+    };
+    mediaRecorderRef.current = recorder;
+    recorder.start();
+    setVoiceState("recording");
+    setLastActivity("Recording — dictating to the co-pilot…");
+  };
+
+  const stopRecording = () => {
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") recorder.stop();
+  };
+
+  // Runs once the recorder flushes its last chunk: release the mic, send the
+  // audio to whisper-server, and append the transcript to the prompt draft.
+  const finishRecording = async (mimeType: string) => {
+    mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+    mediaStreamRef.current = null;
+    mediaRecorderRef.current = null;
+    const chunks = audioChunksRef.current;
+    audioChunksRef.current = [];
+    if (chunks.length === 0) {
+      setVoiceState("idle");
+      return;
+    }
+    setVoiceState("transcribing");
+    setLastActivity("Transcribing on the local engine…");
+    try {
+      const blob = new Blob(chunks, { type: mimeType || "audio/webm" });
+      const { transcript } = await transcribeAudio(blob);
+      const clean = transcript.trim();
+      if (clean) {
+        setDraft((d) => (d ? `${d} ${clean}` : clean));
+        setLastActivity("Voice transcript added to the co-pilot");
+      } else {
+        setLastActivity("No speech detected");
+      }
+    } catch (err) {
+      const e = err as ApiError;
+      setLastActivity(`Transcription failed: ${e?.message ?? String(err)}`);
+    } finally {
+      setVoiceState("idle");
+    }
+  };
+
+  const toggleVoice = () => {
+    if (voiceState === "recording") stopRecording();
+    else if (voiceState === "idle") void startRecording();
+    // Ignore toggles while transcribing — the button is disabled then anyway.
+  };
+
+  // Release the microphone if the workspace unmounts mid-recording. Drop the
+  // onstop handler first so it doesn't fire transcription into a dead component.
+  useEffect(() => {
+    return () => {
+      const recorder = mediaRecorderRef.current;
+      if (recorder) {
+        recorder.onstop = null;
+        if (recorder.state !== "inactive") recorder.stop();
+      }
+      mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+    };
+  }, []);
+
   return (
     <div className="workspace-root">
       <div className="h-full w-full flex flex-col relative">
         <Header
-          recording={recording}
-          onToggleRecording={() => setRecording((r) => !r)}
+          voiceState={voiceState}
+          onToggleRecording={toggleVoice}
           onNavigateHome={onNavigateHome}
           online={online}
           breadcrumb={{ project: session?.title ?? "local session", file: FILE_NAME }}
         />
 
-        {recording && (
-          <div className="shrink-0 h-6 bg-red-950/30 border-b border-red-900/50 flex items-center justify-center gap-2 text-[10.5px] font-medium text-red-300">
-            <span className="w-1.5 h-1.5 rounded-full bg-red-500 pulse-dot" aria-hidden />
-            Recording placeholder — on-device voice capture isn't wired yet (POST /ai/transcribe is a stub).
+        {voiceState !== "idle" && (
+          <div
+            className={`shrink-0 h-6 border-b flex items-center justify-center gap-2 text-[10.5px] font-medium ${
+              voiceState === "recording"
+                ? "bg-red-950/30 border-red-900/50 text-red-300"
+                : "bg-sky-950/30 border-sky-900/50 text-sky-300"
+            }`}
+          >
+            <span
+              className={`w-1.5 h-1.5 rounded-full pulse-dot ${
+                voiceState === "recording" ? "bg-red-500" : "bg-sky-500"
+              }`}
+              aria-hidden
+            />
+            {voiceState === "recording"
+              ? "Recording on-device — click the mic again to stop and transcribe."
+              : "Transcribing your dictation on the local engine…"}
           </div>
         )}
 
@@ -374,7 +481,15 @@ export function WorkspaceLayout({ onNavigateHome }: Props) {
             onFocusCell={focusCell}
             onAddCell={addCell}
           />
-          <CoPilotPane mode={mode} onModeChange={changeMode} thread={thread} busy={aiBusy} onSend={askTutor} />
+          <CoPilotPane
+            mode={mode}
+            onModeChange={changeMode}
+            thread={thread}
+            busy={aiBusy}
+            onSend={askTutor}
+            draft={draft}
+            onDraftChange={setDraft}
+          />
         </div>
 
         <Footer

@@ -26,6 +26,9 @@ type Props = {
   /** true while a Direct-mode answer is streaming. */
   busy: boolean;
   onSend: (question: string) => void;
+  /** Controlled prompt draft, so dictated transcripts can be dropped in here. */
+  draft: string;
+  onDraftChange: (value: string) => void;
 };
 
 function TutorMessage({ message, socratic }: { message: ChatMessage; socratic: boolean }) {
@@ -55,17 +58,16 @@ function TutorMessage({ message, socratic }: { message: ChatMessage; socratic: b
   );
 }
 
-export function CoPilotPane({ mode, onModeChange, thread, busy, onSend }: Props) {
+export function CoPilotPane({ mode, onModeChange, thread, busy, onSend, draft, onDraftChange }: Props) {
   const socratic = mode === "socratic";
   const [thinkingOpen, setThinkingOpen] = useState(false);
   const [model, setModel] = useState(MODELS[0]);
-  const [draft, setDraft] = useState("");
 
   const submit = () => {
     const q = draft.trim();
     if (!q || busy) return;
     onSend(q);
-    setDraft("");
+    onDraftChange("");
   };
 
   return (
@@ -172,7 +174,7 @@ export function CoPilotPane({ mode, onModeChange, thread, busy, onSend }: Props)
             aria-label="Ask the tutor a question"
             disabled={busy}
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => onDraftChange(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") submit();
             }}

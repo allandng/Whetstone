@@ -19,6 +19,7 @@ import type {
   SessionRead,
   SessionTimeline,
   SpecImportResponse,
+  TranscribeResponse,
 } from "./types";
 
 export type * from "./types";
@@ -221,4 +222,29 @@ export function explainError(
 
 export function complexity(cellId: string): Promise<ComplexityResponse> {
   return json<ComplexityResponse>("POST", "/ai/complexity", { cell_id: cellId });
+}
+
+/** Transcribe recorded audio on-device via POST /ai/transcribe (FR-VOICE-1).
+ *  The blob is uploaded as multipart form-data under the `audio` field, matching
+ *  the backend's UploadFile param. Throws an ApiError on a non-OK response (e.g.
+ *  503 when whisper-server is down) so callers can surface a clean failure. */
+export async function transcribeAudio(
+  audio: Blob,
+  signal?: AbortSignal,
+): Promise<TranscribeResponse> {
+  const form = new FormData();
+  form.append("audio", audio, "recording.webm");
+  const res = await fetch(`${API_BASE}/ai/transcribe`, {
+    method: "POST",
+    body: form,
+    signal,
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw Object.assign(
+      new Error(`POST /ai/transcribe failed (${res.status})${detail ? `: ${detail}` : ""}`),
+      { status: res.status },
+    ) as ApiError;
+  }
+  return (await res.json()) as TranscribeResponse;
 }
