@@ -157,9 +157,15 @@ export function WorkspaceLayout({ onNavigateHome, sessionId }: Props) {
     (async () => {
       try {
         // A stale handed-over id (e.g. the session was deleted) 404s; fall
-        // back to the default pick rather than treating it as offline.
+        // back to the default pick. Any other failure (network, 500) rethrows
+        // into the offline path below — silently opening a *different*
+        // session than the one handed over would be worse than the offline
+        // shell.
         const requested = sessionId
-          ? await getSession(sessionId).catch(() => null)
+          ? await getSession(sessionId).catch((err) => {
+              if ((err as ApiError)?.status === 404) return null;
+              throw err;
+            })
           : null;
         const picked =
           requested ??

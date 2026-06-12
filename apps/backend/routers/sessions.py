@@ -16,7 +16,14 @@ from sqlmodel import select
 
 from db import get_session
 from events import list_session_events
-from models import Cell, Event, RequirementItem, Session as SessionModel, Spec
+from models import (
+    Cell,
+    CellRequirementLink,
+    Event,
+    RequirementItem,
+    Session as SessionModel,
+    Spec,
+)
 from schemas import (
     AttachSpecRequest,
     CellRead,
@@ -103,17 +110,49 @@ async def delete_session(
 
     Foreign-key enforcement is on (see ``db.py``), so the session's children
     are removed first; SQLAlchemy orders the DELETEs within the transaction.
+
+    If this was the last session referencing its spec, the spec and its
+    requirement items are removed too. Practice starts mint a fresh spec per
+    session, so without this every deleted practice session would strand a
+    spec + checklist forever (nothing else ever deletes specs).
     """
 
     session = db.get(SessionModel, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found.")
 
+    spec_id = session.spec_id
     for cell in list(session.cells):
         db.delete(cell)
     for event in list(session.events):
         db.delete(event)
     db.delete(session)
+
+    if spec_id is not None:
+        other = db.exec(
+            select(SessionModel)
+            .where(SessionModel.spec_id == spec_id)
+            .where(SessionModel.id != session_id)
+        ).first()
+        if other is None:
+            requirements = db.exec(
+                select(RequirementItem).where(RequirementItem.spec_id == spec_id)
+            ).all()
+            for item in requirements:
+                # Cells in *other* sessions may still link to these items;
+                # drop the link rows so FK enforcement allows the delete.
+                links = db.exec(
+                    select(CellRequirementLink).where(
+                        CellRequirementLink.requirement_id == item.id
+                    )
+                ).all()
+                for link in links:
+                    db.delete(link)
+                db.delete(item)
+            spec = db.get(Spec, spec_id)
+            if spec is not None:
+                db.delete(spec)
+
     db.commit()
     return {"status": "deleted", "session_id": str(session_id)}
 

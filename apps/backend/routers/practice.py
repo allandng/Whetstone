@@ -35,10 +35,10 @@ from sqlmodel import select
 from content.course import COURSE_LESSONS, lesson_by_id
 from content.problems import PATTERN_LABELS, SEED_PROBLEMS
 from db import get_session, session_scope
-from events import emit_event
 from models import (
     Cell,
     CellType,
+    Event,
     LessonProgress,
     Problem,
     ProblemDifficulty,
@@ -75,6 +75,12 @@ _DIFFICULTY_RANK = {
     ProblemDifficulty.medium: 1,
     ProblemDifficulty.hard: 2,
 }
+
+# Patterns sort in the pedagogical order PATTERN_LABELS encodes (arrays &
+# hashing first, dynamic programming last), not alphabetically — beginners
+# should meet the easier patterns first. Unknown patterns sort after the
+# curriculum, alphabetically.
+_PATTERN_RANK = {slug: rank for rank, slug in enumerate(PATTERN_LABELS)}
 
 
 def seed_builtin_problems() -> None:
@@ -132,10 +138,11 @@ async def list_problems(
         query = query.where(Problem.status == status)
 
     rows = list(db.exec(query).all())
-    # Difficulty has a semantic order (easy < medium < hard) that the enum's
-    # alphabetical SQL ordering would scramble, so sort in Python.
+    # Both axes have a semantic order SQL would scramble (curriculum order
+    # for patterns, easy < medium < hard for difficulty), so sort in Python.
     rows.sort(
         key=lambda p: (
+            _PATTERN_RANK.get(p.pattern, len(_PATTERN_RANK)),
             p.pattern,
             _DIFFICULTY_RANK.get(p.difficulty, 99),
             p.created_at,
@@ -193,7 +200,13 @@ async def start_problem(
         f"{problem.difficulty.value}\n"
         "# Full statement and hints: Practice tab. Checklist: left pane.\n\n"
     )
-    response = _start_session(
+    # Staged (not committed) here so it rides _start_session's single commit:
+    # the status bump and the session bundle land or fail together.
+    if problem.status == ProblemStatus.not_started:
+        problem.status = ProblemStatus.attempted
+        db.add(problem)
+
+    return _start_session(
         db,
         title=f"Practice: {problem.title}",
         spec_text=problem.prompt,
@@ -206,13 +219,6 @@ async def start_problem(
             "title": problem.title,
         },
     )
-
-    if problem.status == ProblemStatus.not_started:
-        problem.status = ProblemStatus.attempted
-        db.add(problem)
-        db.commit()
-
-    return response
 
 
 @router.post("/problems/{problem_id}/similar", response_model=ProblemRead)
@@ -416,12 +422,16 @@ def _start_session(
     it creates is ordinary workspace data, so cell runs, the tutor, and the
     timeline need no special cases. A ``practice_start`` event opens the
     session's timeline so replay shows where the session came from.
+
+    The whole bundle is one transaction (ids are client-generated UUIDs, so
+    no intermediate flushes are needed): a failure part-way leaves nothing
+    behind, rather than an orphaned Spec or a session missing its starter
+    cell. The Event row is built directly instead of via
+    :func:`events.emit_event`, which commits eagerly by design.
     """
 
     spec = Spec(source_type=SourceType.text, raw_text=spec_text)
     db.add(spec)
-    db.commit()
-    db.refresh(spec)
 
     for text in checklist:
         db.add(
@@ -434,8 +444,6 @@ def _start_session(
 
     session = SessionModel(title=title, spec_id=spec.id)
     db.add(session)
-    db.commit()
-    db.refresh(session)
 
     db.add(
         Cell(
@@ -446,13 +454,14 @@ def _start_session(
             order_index=0,
         )
     )
-    db.commit()
 
-    emit_event(
-        db,
-        session_id=session.id,
-        event_type="practice_start",
-        payload=event_payload,
+    db.add(
+        Event(
+            session_id=session.id,
+            event_type="practice_start",
+            payload=json.dumps(event_payload),
+        )
     )
+    db.commit()
 
     return PracticeStartResponse(session_id=session.id, spec_id=spec.id)

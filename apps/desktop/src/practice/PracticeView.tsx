@@ -35,7 +35,10 @@ type Tab = "learn" | "problems";
 // for content we author ourselves, so this renders just those forms.
 
 function renderInline(text: string): ReactNode[] {
-  const parts = text.split(/(\*\*[^*]+\*\*|\*[^*\n]+\*|`[^`]+`)/g);
+  // Italic requires non-space characters just inside both asterisks
+  // (markdown's emphasis rule), so multiplication like `a * b * c` — common
+  // in generated problem statements — is left alone instead of being eaten.
+  const parts = text.split(/(\*\*[^*]+\*\*|\*(?=\S)[^*\n]+(?<=\S)\*|`[^`]+`)/g);
   return parts.map((part, i) => {
     if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
       return <strong key={i}>{part.slice(2, -2)}</strong>;
@@ -56,7 +59,9 @@ function RichText({ text }: { text: string }) {
     <div className="practice-richtext">
       {segments.map((segment, i) =>
         i % 2 === 1 ? (
-          <pre key={i}>{segment.replace(/^[a-z+]*\n/, "")}</pre>
+          // Strip the fence's language tag; generated prompts use tags like
+          // "Python" or "python3", so allow case, digits, and c++/c#.
+          <pre key={i}>{segment.replace(/^[A-Za-z0-9+#-]*\n/, "")}</pre>
         ) : (
           <div key={i} className="practice-richtext__prose">
             {renderInline(segment)}
@@ -162,11 +167,13 @@ function LearnTab({
 
 function ProblemsTab({
   problems,
-  onRefresh,
+  onProblemChanged,
+  onProblemAdded,
   onOpenSession,
 }: {
   problems: ProblemRead[];
-  onRefresh: () => Promise<void>;
+  onProblemChanged: (problem: ProblemRead) => void;
+  onProblemAdded: (problem: ProblemRead) => void;
   onOpenSession: (sessionId: string) => void;
 }) {
   const [patternFilter, setPatternFilter] = useState("all");
@@ -199,11 +206,18 @@ function ProblemsTab({
 
   const shownHints = selected ? (revealed[selected.id] ?? 0) : 0;
 
+  // The note steers generation for ONE problem; switching problems must not
+  // carry a stale note along to a different problem's generator.
+  useEffect(() => {
+    setNote("");
+  }, [selected?.id]);
+
   const setStatus = async (problem: ProblemRead, status: ProblemStatus) => {
     setError(null);
     try {
-      await updateProblemStatus(problem.id, status);
-      await onRefresh();
+      // PATCH returns the authoritative row; merge it instead of refetching
+      // the whole (ever-growing) bank.
+      onProblemChanged(await updateProblemStatus(problem.id, status));
     } catch (err) {
       setError(`Status update failed: ${errMessage(err)}`);
     }
@@ -225,15 +239,11 @@ function ProblemsTab({
   const generate = async (problem: ProblemRead) => {
     setGenerating(true);
     setError(null);
+    let variant: ProblemRead;
     try {
-      const variant = await generateSimilarProblem(problem.id, {
+      variant = await generateSimilarProblem(problem.id, {
         note: note.trim() || null,
       });
-      setNote("");
-      await onRefresh();
-      setPatternFilter("all");
-      setDifficultyFilter("all");
-      setSelectedId(variant.id);
     } catch (err) {
       const status = (err as ApiError)?.status;
       setError(
@@ -243,9 +253,19 @@ function ProblemsTab({
             ? "The model's reply wasn't a usable problem — this happens with small models; try again."
             : `Generation failed: ${errMessage(err)}`,
       );
+      return;
     } finally {
       setGenerating(false);
     }
+    // Post-success bookkeeping happens outside the try: the variant is
+    // already persisted, so a hiccup here must not read as "generation
+    // failed" (a retry would mint a duplicate). The POST returned the row;
+    // no refetch needed.
+    setNote("");
+    onProblemAdded(variant);
+    setPatternFilter("all");
+    setDifficultyFilter("all");
+    setSelectedId(variant.id);
   };
 
   return (
@@ -425,12 +445,34 @@ export function PracticeView({ onOpenSession }: Props) {
   const [tab, setTab] = useState<Tab>("learn");
   const [lessons, setLessons] = useState<LessonRead[] | null>(null);
   const [problems, setProblems] = useState<ProblemRead[] | null>(null);
+  // loadError = the initial fetch failed (nothing to show); actionError = a
+  // later action failed (content is fine — show a dismissible banner, don't
+  // blank the view).
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [startingLesson, setStartingLesson] = useState(false);
 
-  const refreshProblems = async () => {
-    setProblems(await listProblems());
-  };
+  const mergeProblem = (updated: ProblemRead) =>
+    setProblems(
+      (ps) => ps?.map((p) => (p.id === updated.id ? updated : p)) ?? null,
+    );
+
+  // Insert a new variant right after the last problem of its pattern, which
+  // is where the backend's (pattern, difficulty, created_at) sort will put
+  // it on the next full load (variants are the newest of their pattern).
+  const addProblem = (variant: ProblemRead) =>
+    setProblems((ps) => {
+      const next = [...(ps ?? [])];
+      let at = next.length;
+      for (let i = next.length - 1; i >= 0; i--) {
+        if (next[i].pattern === variant.pattern) {
+          at = i + 1;
+          break;
+        }
+      }
+      next.splice(at, 0, variant);
+      return next;
+    });
 
   useEffect(() => {
     let cancelled = false;
@@ -469,11 +511,13 @@ export function PracticeView({ onOpenSession }: Props) {
 
   const startLessonExercise = async (lesson: LessonRead) => {
     setStartingLesson(true);
+    setActionError(null);
     try {
       const { session_id } = await startLesson(lesson.id);
       onOpenSession(session_id);
     } catch (err) {
-      setLoadError(`Could not open the workspace: ${errMessage(err)}`);
+      // Non-fatal: the course is still loaded and usable.
+      setActionError(`Could not open the workspace: ${errMessage(err)}`);
     } finally {
       setStartingLesson(false);
     }
@@ -507,25 +551,31 @@ export function PracticeView({ onOpenSession }: Props) {
 
       {loadError ? (
         <p className="practice-error">{loadError}</p>
-      ) : tab === "learn" ? (
-        lessons === null ? (
-          <p className="practice-empty">Loading the course…</p>
-        ) : (
-          <LearnTab
-            lessons={lessons}
-            onToggleComplete={toggleLessonComplete}
-            onStartExercise={startLessonExercise}
-            starting={startingLesson}
-          />
-        )
-      ) : problems === null ? (
-        <p className="practice-empty">Loading the problem bank…</p>
       ) : (
-        <ProblemsTab
-          problems={problems}
-          onRefresh={refreshProblems}
-          onOpenSession={onOpenSession}
-        />
+        <>
+          {actionError && <p className="practice-error">{actionError}</p>}
+          {tab === "learn" ? (
+            lessons === null ? (
+              <p className="practice-empty">Loading the course…</p>
+            ) : (
+              <LearnTab
+                lessons={lessons}
+                onToggleComplete={toggleLessonComplete}
+                onStartExercise={startLessonExercise}
+                starting={startingLesson}
+              />
+            )
+          ) : problems === null ? (
+            <p className="practice-empty">Loading the problem bank…</p>
+          ) : (
+            <ProblemsTab
+              problems={problems}
+              onProblemChanged={mergeProblem}
+              onProblemAdded={addProblem}
+              onOpenSession={onOpenSession}
+            />
+          )}
+        </>
       )}
     </div>
   );

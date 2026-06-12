@@ -19,24 +19,31 @@ BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
 
-# Reuse the database already configured by test_integration when pytest runs
-# the whole suite; set one up when this file runs alone.
-if "WHETSTONE_DATABASE_URL" not in os.environ:
-    _TMP_DB = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    _TMP_DB.close()
-    os.environ["WHETSTONE_DATABASE_URL"] = f"sqlite:///{_TMP_DB.name}"
+# Always force a throwaway database, exactly like test_integration.py does.
+# A presence check would be a footgun: a developer with WHETSTONE_DATABASE_URL
+# exported to their real database who runs this file alone would have fresh_db
+# drop every table in it. When the whole suite runs, whichever test module is
+# imported first wins the engine binding — both candidates are temp files.
+_TMP_DB = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+_TMP_DB.close()
+os.environ["WHETSTONE_DATABASE_URL"] = f"sqlite:///{_TMP_DB.name}"
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlmodel import SQLModel  # noqa: E402
 
 import db as db_module  # noqa: E402
+import routers.ai as ai_router  # noqa: E402
 import routers.practice as practice_router  # noqa: E402
 from content.course import COURSE_LESSONS  # noqa: E402
-from content.problems import SEED_PROBLEMS  # noqa: E402
+from content.problems import PATTERN_LABELS, SEED_PROBLEMS  # noqa: E402
 from main import app  # noqa: E402
+from models import Problem, ProblemDifficulty  # noqa: E402
 from services.llm_client import LLMUnavailableError  # noqa: E402
-from services.problem_generator import parse_generated_problem  # noqa: E402
+from services.problem_generator import (  # noqa: E402
+    build_generation_messages,
+    parse_generated_problem,
+)
 
 
 # --- Fixtures ---------------------------------------------------------------
@@ -100,6 +107,12 @@ def test_problem_bank_seeded_and_ordered(client):
     problems = client.get("/practice/problems").json()
     assert len(problems) == len(SEED_PROBLEMS)
     assert {p["slug"] for p in problems} == {s["slug"] for s in SEED_PROBLEMS}
+
+    # Patterns appear in curriculum order (PATTERN_LABELS insertion order),
+    # not alphabetically — DP must come last, not third.
+    seen_patterns = list(dict.fromkeys(p["pattern"] for p in problems))
+    curriculum = [slug for slug in PATTERN_LABELS if slug in set(seen_patterns)]
+    assert seen_patterns == curriculum
 
     # Within one pattern, easy sorts before medium.
     by_pattern: dict[str, list[str]] = {}
@@ -203,6 +216,70 @@ def test_start_problem_creates_workspace_session(client):
         client.get(f"/practice/problems/{problem['id']}").json()["status"]
         == "attempted"
     )
+
+
+def test_tutor_context_includes_problem_statement(client, monkeypatch):
+    """The AI tutor on a practice session must see the actual problem.
+
+    The statement lives in Spec.raw_text (the checklist items are generic),
+    so _assemble_context must surface it — otherwise the tutor answers blind.
+    """
+
+    captured: dict = {}
+
+    async def _capture_ask(messages, stream=False, thinking=False):
+        captured["messages"] = messages
+        yield "Looks like an off-by-one."
+
+    monkeypatch.setattr(ai_router.llm_client, "ask", _capture_ask)
+
+    problem = client.get("/practice/problems").json()[0]
+    started = client.post(f"/practice/problems/{problem['id']}/start").json()
+    cell = client.get(f"/sessions/{started['session_id']}/cells").json()[0]
+
+    resp = client.post(
+        "/ai/explain-error",
+        json={"cell_id": cell["id"], "error_text": "IndexError: list index out of range"},
+    )
+    assert resp.status_code == 200
+
+    system = captured["messages"][0]["content"]
+    # A distinctive slice of the statement, not just the title.
+    assert problem["prompt"][:60] in system
+
+
+def test_delete_session_garbage_collects_practice_spec(client):
+    """Deleting a practice session must not strand its per-session spec."""
+
+    problem = client.get("/practice/problems").json()[0]
+    started = client.post(f"/practice/problems/{problem['id']}/start").json()
+
+    assert (
+        client.get(f"/specs/{started['spec_id']}/requirements").status_code == 200
+    )
+    assert (
+        client.delete(f"/sessions/{started['session_id']}").status_code == 200
+    )
+    # Spec and its requirement items are gone with their only session.
+    assert (
+        client.get(f"/specs/{started['spec_id']}/requirements").status_code == 404
+    )
+
+
+def test_generation_prompt_caps_user_inputs():
+    """A pasted novel must not swamp the local model's context window."""
+
+    source = Problem(
+        slug="s",
+        title="T",
+        pattern="stack",
+        difficulty=ProblemDifficulty.easy,
+        prompt="P",
+    )
+    messages = build_generation_messages(source, "n" * 50_000, "c" * 50_000)
+    user = messages[1]["content"]
+    assert len(user) < 20_000
+    assert user.count("…[truncated]") == 2
 
 
 def test_start_does_not_downgrade_status(client):

@@ -72,7 +72,13 @@ function App() {
       <WorkspaceLayout
         key={workspaceSessionId ?? "latest"}
         sessionId={workspaceSessionId}
-        onNavigateHome={() => setView("home")}
+        onNavigateHome={() => {
+          // Leaving the workspace consumes the Practice handoff: the next
+          // plain visit resumes the most-recently-modified session again
+          // instead of staying pinned to the handed-over one forever.
+          setWorkspaceSessionId(null);
+          setView("home");
+        }}
       />
     );
   }

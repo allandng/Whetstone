@@ -25,6 +25,11 @@ from models import Problem, ProblemDifficulty
 _MAX_TEXT_CHARS = 8000
 _MAX_LIST_ITEMS = 6
 
+# Input-side caps, mirroring routers/ai.py's prompt budget: a huge pasted
+# attempt or essay-length note would swamp the small local model's context.
+_MAX_NOTE_CHARS = 2000
+_MAX_CODE_CHARS = 4000
+
 _GENERATOR_ROLE = (
     "You are Whetstone's practice-problem author. You write ORIGINAL coding "
     "interview practice problems for a student, exercising a specific "
@@ -71,13 +76,14 @@ def build_generation_messages(
     if struggle_note and struggle_note.strip():
         parts.append(
             "The student said this about why they struggled — design the "
-            f"variant so practicing it targets exactly that:\n{struggle_note.strip()}"
+            "variant so practicing it targets exactly that:\n"
+            f"{_truncate(struggle_note.strip(), _MAX_NOTE_CHARS)}"
         )
     if user_code and user_code.strip():
         parts.append(
             "The student's attempt at the source problem (it may be wrong "
             "or incomplete):\n```python\n"
-            f"{user_code.strip()}\n```"
+            f"{_truncate(user_code.strip(), _MAX_CODE_CHARS)}\n```"
         )
     parts.append(_OUTPUT_CONTRACT)
 
@@ -153,6 +159,12 @@ def _first_json_object(text: str):
                         break
         start = text.find("{", start + 1)
     return None
+
+
+def _truncate(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\n…[truncated]"
 
 
 def _clean_str(value) -> str:
