@@ -1,4 +1,5 @@
 #include <cassert>
+#include <csignal>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <string>
@@ -138,7 +139,14 @@ static ssize_t parse_content_length(int client, std::string headers)
 
 std::string read_body(int client, ssize_t content_length, std::string body)
 {
-  size_t remaining = content_length - body.length();
+  // Guard against underflow: the header read in request2task() may have already
+  // buffered more bytes than Content-Length (e.g. a small or zero Content-Length
+  // with a larger body in the same packet). Computing remaining as an unsigned
+  // subtraction would wrap to a huge value and hand read() a bogus length.
+  size_t remaining =
+      (content_length > 0 && static_cast<size_t>(content_length) > body.length())
+          ? static_cast<size_t>(content_length) - body.length()
+          : 0;
 
   char buffer[READ_BUFFER_SZ];
   while (remaining > 0) {
@@ -256,6 +264,12 @@ void graceful_shutdown(int /* sig_num */)
 // - none
 int main(int argc, char **argv)
 {
+  // Ignore SIGPIPE: a client that closes the connection before reading the
+  // reply would otherwise deliver SIGPIPE on the next write() and terminate the
+  // whole server. With it ignored, write() returns EPIPE and the worker thread
+  // simply abandons that response.
+  std::signal(SIGPIPE, SIG_IGN);
+
   // Select the server port
   uint16_t server_port = select_port(argc, argv);
 

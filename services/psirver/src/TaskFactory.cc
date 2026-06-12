@@ -209,6 +209,16 @@ static Task *new_upload_task(int client,
   }
 
   const std::string filename = body.substr(fname_start, fname_end - fname_start);
+
+  // The filename is written under scripts/<id>/, so reject any path components
+  // ('/' or "..") or a leading dot that could escape that directory or hide the
+  // file. Legitimate uploads use plain names like "script.py" / "script.cpp".
+  if (filename.empty() || filename.front() == '.' ||
+      filename.find('/') != std::string::npos ||
+      filename.find("..") != std::string::npos) {
+    return nullptr;
+  }
+
   const std::string script =   body.substr( data_start,  data_end -  data_start);
 
   return new UploadTask(client, filename, script);
