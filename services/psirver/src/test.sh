@@ -103,10 +103,16 @@ jid="$(run_script "$sid" python)"
 res="$(poll "$jid")"
 case "$res" in *COMPLETED*) bad "runaway loop should not COMPLETE ($res)" ;; *) ok "runaway loop contained" ;; esac
 
-# 5. Path-traversal upload is rejected and writes nothing outside scripts/.
-code="$(printf 'POST /scripts/upload HTTP/1.1\r\nHost: x\r\nContent-Type: multipart/form-data; boundary=B\r\nContent-Length: 128\r\n\r\n--B\r\nContent-Disposition: form-data; name="file"; filename="../../escaped.txt"\r\n\r\nhi\r\n--B--\r\n' | nc -w2 "$HOST" "$PORT" | head -1)"
-case "$code" in *400*) ok "traversal filename rejected (400)" ;; *) bad "traversal filename rejected ($code)" ;; esac
-[ -e "$HOME_DIR/../escaped.txt" ] && bad "traversal escaped the home dir" || ok "traversal wrote nothing outside home"
+# 5. Path-traversal upload is rejected and writes nothing outside the tree.
+#    Use curl so framing/Content-Length are correct (a hand-rolled request can
+#    race the read timeout); ../../../ from scripts/<id>/ would land above the
+#    home dir if the guard failed.
+escaped="$HOME_DIR/../pwned_psirvertest.txt"
+rm -f "$escaped" 2>/dev/null
+code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/scripts/upload" \
+  -F 'file=@-;filename=../../../pwned_psirvertest.txt' <<<'hi')"
+case "$code" in 400) ok "traversal filename rejected (400)" ;; *) bad "traversal filename rejected (got '$code')" ;; esac
+if [ -e "$escaped" ]; then bad "traversal escaped the home dir"; rm -f "$escaped"; else ok "traversal wrote nothing outside home"; fi
 
 # 6. SIGPIPE: clients that disconnect before reading the reply must not crash it.
 for _ in 1 2 3 4 5; do printf 'GET /jobs HTTP/1.1\r\nHost: x\r\n\r\n' | nc -w1 "$HOST" "$PORT" >/dev/null 2>&1 & done
