@@ -63,12 +63,15 @@ for it when you want one service in isolation or the backend with `--reload`.
 
 ## Start order
 
-> `make dev` performs steps 1–3 below for you (in this order, with readiness
-> checks). The manual steps are here for running a service in isolation.
+> `make dev` performs the steps below for you (with readiness checks and clean
+> teardown). The manual steps are here for running a service in isolation. The
+> backend connects to its services lazily, so the exact start order is not
+> significant — `make dev` happens to start Psirver and the model servers first,
+> then the backend.
 
-Start the services first, then the backend, then the frontend:
+Start the local services first, then the backend, then the frontend:
 
-1. llama-server  →  2. Psirver  →  3. FastAPI backend  →  4. Tauri frontend
+1. Psirver · llama-server · whisper-server  →  2. FastAPI backend  →  3. Tauri frontend
 
 The backend's service clients connect lazily, so it will **boot** even if
 llama-server or Psirver are down — it only fails (loudly, per request) when an
@@ -167,7 +170,8 @@ npm run dev          # then open http://localhost:1420 in a browser
 ```
 
 The Timeline panel works fully in a browser (it just calls the backend over
-loopback; CORS is open). The Home view's **Greet** button calls into Rust via
+loopback; the backend's CORS allow-list includes this `localhost:1420` dev
+origin). The Home view's **Greet** button calls into Rust via
 Tauri and will only work inside the desktop window.
 
 ---

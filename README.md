@@ -87,7 +87,7 @@ Defaults suit a single-file Python/C++ assignment and can be overridden at start
 | -------- | ------- | ------- |
 | `PSIRVER_LIMIT_CPU_SECONDS` | `10` | `RLIMIT_CPU` soft+hard cap |
 | `PSIRVER_LIMIT_AS_MB` | `2048` | `RLIMIT_AS` (virtual memory); `0` disables |
-| `PSIRVER_LIMIT_FSIZE_MB` | `64` | `RLIMIT_FSIZE` per-file cap |
+| `PSIRVER_LIMIT_FSIZE_MB` | `1024` | `RLIMIT_FSIZE` per-file cap (sized for clang++) |
 | `PSIRVER_LIMIT_WALL_SECONDS` | `15` | reaper wall-clock deadline; `0` disables |
 | `PSIRVER_LIMIT_KILL_GRACE_SECONDS` | `3` | `SIGTERM` -> `SIGKILL` escalation window |
 
@@ -123,7 +123,7 @@ cd services/psirver/src
 |---|---|
 | Frontend | Tauri + React |
 | Backend | FastAPI (Python) |
-| Storage | SQLite via SQLModel, with sqlite-vec for semantic search |
+| Storage | SQLite via SQLModel |
 | Inference | llama.cpp (`llama-server`), Gemma 4 E4B minimum / 26B A4B recommended |
 | Speech-to-text | Whisper (`whisper-server`) |
 | Code execution | Psirver (C++), Python and C++ cells |
@@ -138,7 +138,7 @@ Whetstone is the third app in a privacy-first student suite:
 - **Chalkmark** - local-first AI study and note-taking app with branchable, git-style note versions.
 - **Whetstone** - this project: the assignment problem-solving environment.
 
-It borrows its backend shape from LoomAssist (Tauri + FastAPI + SQLModel) and its semantic search from Chalkmark (sqlite-vec). The apps run independently but are built to interoperate where it's natural.
+It borrows its backend shape from LoomAssist (Tauri + FastAPI + SQLModel). Deeper suite interop — shared semantic search over sessions (sqlite-vec, as in Chalkmark) and cross-app links — is planned, not part of v1. The apps run independently but are built to interoperate where it's natural.
 
 ## Getting started
 
@@ -224,7 +224,9 @@ tears all four down and frees their ports. If a model file, the Psirver binary,
 or a port is missing it fails up front with the exact reason rather than coming
 up half-wired. Full detail — ports, env vars, troubleshooting — is in
 [`RUNNING.md`](RUNNING.md), and [`SMOKE_TEST.md`](SMOKE_TEST.md) is a click-by-click
-acceptance pass.
+acceptance pass. Setting up on a fresh machine? Follow
+[`docs/cold-start-checklist.md`](docs/cold-start-checklist.md) — a from-clone,
+tick-the-box run-through with the failure points called out.
 
 ### Packaging (macOS bundle)
 

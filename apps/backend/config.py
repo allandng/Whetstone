@@ -43,6 +43,14 @@ class Settings(BaseSettings):
     host: str = Field(default="127.0.0.1", description="Backend bind host.")
     port: int = Field(default=8000, description="Backend bind port.")
 
+    # --- Uploads -------------------------------------------------------
+    # Reject request bodies larger than this. Bounds the spec-import PDF and the
+    # voice-transcription audio so a single large upload can't exhaust memory.
+    max_upload_bytes: int = Field(
+        default=25 * 1024 * 1024,  # 25 MiB
+        description="Maximum accepted request body size in bytes.",
+    )
+
     # --- CORS ----------------------------------------------------------
     # Origins permitted to make credentialed cross-origin requests. The
     # frontend is a Tauri webview, so the only legitimate origins are the

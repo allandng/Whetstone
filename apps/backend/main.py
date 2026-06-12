@@ -51,6 +51,29 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    @app.middleware("http")
+    async def _limit_body_size(request: Request, call_next):
+        """Reject oversized request bodies up front by Content-Length.
+
+        Bounds the spec-import PDF and the transcription audio so a single large
+        upload can't exhaust memory before a handler runs. Chunked requests with
+        no Content-Length fall through to the handlers, which read defensively.
+        """
+
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > settings.max_upload_bytes:
+                    return JSONResponse(
+                        status_code=413,
+                        content={"detail": "Request body too large."},
+                    )
+            except ValueError:
+                return JSONResponse(
+                    status_code=400, content={"detail": "Invalid Content-Length."}
+                )
+        return await call_next(request)
+
     @app.exception_handler(Exception)
     async def _unhandled_exception_handler(
         request: Request, exc: Exception

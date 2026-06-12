@@ -40,5 +40,5 @@ bundle: ## Build the macOS Tauri release bundle (.app + .dmg).
 
 .PHONY: clean
 clean: ## Remove dev scratch (logs, run dir). Leaves the venv and models.
-	@rm -rf $(ROOT).dev-logs $(ROOT).dev-run
+	@rm -rf "$(ROOT).dev-logs" "$(ROOT).dev-run"
 	@echo "removed .dev-logs/ and .dev-run/"

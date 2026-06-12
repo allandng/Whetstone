@@ -69,6 +69,10 @@ private:
   void reaper_loop();
   // Compute a job's terminal state from a wait() status. Caller holds mu_.
   void apply_status_locked(Job &job, int wait_status);
+  // Drop the oldest terminal jobs (and their capture files) once the table
+  // exceeds its cap, so a long-lived server doesn't grow without bound. Never
+  // evicts a queued/running job. Caller holds mu_.
+  void evict_terminal_locked();
   // Enforce wall-clock deadlines and escalate pending terminations to SIGKILL.
   // Runs once per reaper tick. Caller holds mu_.
   void enforce_limits_locked();

@@ -160,12 +160,14 @@ cleanup() {
   done
   # Backstop: free the loopback ports we started on, in case a service spawned
   # a child that outlived it (e.g. a model server still holding the GPU/port).
-  # Scoped to the exact ports we own and just preflighted as free.
+  # -sTCP:LISTEN restricts the match to processes *listening* on the port — so
+  # an unrelated process with a merely outbound connection whose remote port
+  # happens to equal one of ours is never killed.
   local p holders
   if [ "${#SVC_PORTS[@]}" -gt 0 ]; then
     for p in "${SVC_PORTS[@]}"; do
       [ -n "$p" ] || continue
-      holders="$(lsof -ti tcp:"$p" 2>/dev/null || true)"
+      holders="$(lsof -ti tcp:"$p" -sTCP:LISTEN 2>/dev/null || true)"
       [ -n "$holders" ] && kill -KILL $holders 2>/dev/null || true
     done
   fi
@@ -175,7 +177,10 @@ cleanup() {
 trap cleanup INT TERM EXIT
 
 # --- Helpers ---------------------------------------------------------------
-port_holders() { lsof -ti tcp:"$1" 2>/dev/null || true; }
+# Only processes *listening* on the port conflict with our bind (and are ours
+# to free). -sTCP:LISTEN avoids matching unrelated outbound connections that
+# merely share the port number as their remote endpoint.
+port_holders() { lsof -ti tcp:"$1" -sTCP:LISTEN 2>/dev/null || true; }
 
 # Block until a URL is reachable, or the backing process dies, or we time out.
 #   wait_ready <name> <url> <timeout> <mode: health|connect> <pid>

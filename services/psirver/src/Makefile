@@ -19,6 +19,6 @@ clean:
 DEPEND:
 	$(CXX) -MM *.cc > DEPEND
 
-test:
+test: $(BIN)
 	@./test.sh
 #END

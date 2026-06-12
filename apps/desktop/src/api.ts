@@ -226,14 +226,17 @@ export function complexity(cellId: string): Promise<ComplexityResponse> {
 
 /** Transcribe recorded audio on-device via POST /ai/transcribe (FR-VOICE-1).
  *  The blob is uploaded as multipart form-data under the `audio` field, matching
- *  the backend's UploadFile param. Throws an ApiError on a non-OK response (e.g.
- *  503 when whisper-server is down) so callers can surface a clean failure. */
+ *  the backend's UploadFile param. Callers convert to WAV first (see audio.ts),
+ *  the format whisper-server accepts natively. Throws an ApiError on a non-OK
+ *  response (e.g. 503 when whisper-server is down) so callers surface a clean
+ *  failure. */
 export async function transcribeAudio(
   audio: Blob,
   signal?: AbortSignal,
 ): Promise<TranscribeResponse> {
   const form = new FormData();
-  form.append("audio", audio, "recording.webm");
+  const name = audio.type === "audio/wav" ? "recording.wav" : "recording.webm";
+  form.append("audio", audio, name);
   const res = await fetch(`${API_BASE}/ai/transcribe`, {
     method: "POST",
     body: form,

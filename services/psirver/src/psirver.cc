@@ -1,4 +1,5 @@
 #include <cassert>
+#include <csignal>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <string>
@@ -38,7 +39,9 @@ void reply(int client, const char *status_line, const char *body)
 
   write(client, headers.data(), headers.size());
   write(client, body, strlen(body));
-  close(client);
+  // The socket is closed by the owner — ~Task() for a dispatched task, or the
+  // error paths in request2task() for a request that never became one. Closing
+  // here too would double-close the fd and could sever a reused descriptor.
 }
 
 // Reply with a length-delimited body and an explicit content type. Unlike
@@ -62,7 +65,7 @@ void reply_data(int client, const char *status_line, const std::string &body,
 
   write(client, headers.data(), headers.size());
   write(client, body.data(), body.size());
-  close(client);
+  // See reply(): the fd's owner closes it, not this function.
 }
 
 int init_socket(uint16_t port)
@@ -138,7 +141,14 @@ static ssize_t parse_content_length(int client, std::string headers)
 
 std::string read_body(int client, ssize_t content_length, std::string body)
 {
-  size_t remaining = content_length - body.length();
+  // Guard against underflow: the header read in request2task() may have already
+  // buffered more bytes than Content-Length (e.g. a small or zero Content-Length
+  // with a larger body in the same packet). Computing remaining as an unsigned
+  // subtraction would wrap to a huge value and hand read() a bogus length.
+  size_t remaining =
+      (content_length > 0 && static_cast<size_t>(content_length) > body.length())
+          ? static_cast<size_t>(content_length) - body.length()
+          : 0;
 
   char buffer[READ_BUFFER_SZ];
   while (remaining > 0) {
@@ -173,6 +183,15 @@ Task *request2task()
     return nullptr;
   }
 
+  // Bound the blocking header/body reads so a client that connects and then
+  // stalls (slowloris) can't hang the single-threaded accept loop forever: a
+  // read that makes no progress within the window returns EAGAIN, which the
+  // read paths below treat as a closed connection. Best effort.
+  struct timeval rcv_timeout{};
+  rcv_timeout.tv_sec = 15;
+  setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &rcv_timeout, sizeof(rcv_timeout));
+  setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &rcv_timeout, sizeof(rcv_timeout));
+
   char buffer[READ_BUFFER_SZ];
   size_t header_end_pos = std::string::npos;
   ssize_t chunk_sz;
@@ -194,6 +213,7 @@ Task *request2task()
 
   if (request.size() > MAX_REQUEST_SZ) {
     reply(client, "HTTP/1.1 413 Content Too Large", "Content Too Large");
+    close(client);  // no Task owns this fd; reply() no longer closes
     return nullptr;
   }
 
@@ -204,6 +224,7 @@ Task *request2task()
 
     if(!task) {
       reply(client, "HTTP/1.1 400 Bad Request", "Bad Request");
+      close(client);
       return nullptr;
     }
 
@@ -215,6 +236,9 @@ Task *request2task()
     ssize_t content_length = parse_content_length(client, headers);
 
     if (content_length < 0) {
+      // parse_content_length() already sent the error reply; close the fd it
+      // wrote to (reply() no longer closes).
+      close(client);
       return nullptr;
     }
 
@@ -224,6 +248,7 @@ Task *request2task()
     Task *task = Task::construct(client, headers, body);
     if(!task) {
       reply(client, "HTTP/1.1 400 Bad Request", "Bad Request");
+      close(client);
       return nullptr;
     }
 
@@ -232,6 +257,7 @@ Task *request2task()
 
   reply(client, "HTTP/1.1 405 Method Not Allowed",
 	(request.substr(0, 0x10) + "...").c_str());
+  close(client);
   return nullptr;
 }
 
@@ -256,6 +282,12 @@ void graceful_shutdown(int /* sig_num */)
 // - none
 int main(int argc, char **argv)
 {
+  // Ignore SIGPIPE: a client that closes the connection before reading the
+  // reply would otherwise deliver SIGPIPE on the next write() and terminate the
+  // whole server. With it ignored, write() returns EPIPE and the worker thread
+  // simply abandons that response.
+  std::signal(SIGPIPE, SIG_IGN);
+
   // Select the server port
   uint16_t server_port = select_port(argc, argv);
 
