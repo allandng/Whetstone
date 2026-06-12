@@ -33,9 +33,11 @@ trap cleanup EXIT INT TERM
 
 [ -x "$BIN" ] || { echo "psirver binary not built ($BIN); run make first" >&2; exit 2; }
 
-# A short wall/CPU cap so the runaway test finishes quickly.
-export PSIRVER_LIMIT_WALL_SECONDS=4
-export PSIRVER_LIMIT_CPU_SECONDS=3
+# Modest wall/CPU caps so the runaway test ends reasonably fast, but with enough
+# headroom that a cold clang++ compile on a slow CI runner isn't itself killed
+# (the C++ job is compile-then-run under one cap).
+export PSIRVER_LIMIT_WALL_SECONDS=10
+export PSIRVER_LIMIT_CPU_SECONDS=8
 
 ( cd "$HOME_DIR" && exec env PSIRVER_HOME="$HOME_DIR" "$BIN" "$PORT" ) >"$HOME_DIR/server.log" 2>&1 &
 PSIRVER_PID=$!
@@ -63,7 +65,7 @@ run_script() {
 # Poll a job until terminal (or timeout). Prints the final JSON.
 poll() {
   local jid="$1" i json status
-  for i in $(seq 1 100); do
+  for i in $(seq 1 200); do  # ~20s ceiling: covers a slow cold clang compile
     json="$(curl -s "$BASE/jobs/$jid")"
     status="$(printf '%s' "$json" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([A-Z]*\)".*/\1/p')"
     case "$status" in COMPLETED|FAILED|TERMINATED) printf '%s' "$json"; return 0 ;; esac
