@@ -1,6 +1,4 @@
 import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
 import Timeline from "./components/Timeline";
 import { WorkspaceLayout } from "./workspace/WorkspaceLayout";
 import "./App.css";
@@ -8,46 +6,19 @@ import "./App.css";
 type View = "workspace" | "home" | "timeline";
 
 function HomeView() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
-
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
-
   return (
     <div className="home">
-      <h1>Welcome to Tauri + React</h1>
-
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
+      <h1>Whetstone</h1>
+      <p>
+        A local-first problem-solving environment for CS students — your code,
+        your reasoning, and an on-device AI tutor, all on your own machine.
+      </p>
+      <p>
+        The <strong>Workspace</strong> is where you do the work: write and run
+        cells, track spec requirements, ask the co-pilot, and replay your
+        session timeline. The <strong>Timeline</strong> tab loads any session by
+        id. Use the sidebar to switch between them.
+      </p>
     </div>
   );
 }
