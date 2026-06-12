@@ -4,6 +4,29 @@ All notable changes to Whetstone are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Practice area** (sidebar → Practice) with two halves:
+  - **Learn to Code** — an eight-lesson beginner course (variables through
+    dictionaries and a capstone exercise), each lesson with a runnable
+    exercise and tracked completion.
+  - **DSA Problems** — a bank of original practice problems organized by
+    interview pattern (arrays & hashing, two pointers, sliding window, stack,
+    binary search, trees, dynamic programming), each with worked examples, a
+    graded three-hint ladder, and Python starter code.
+- **Open in Workspace** — any lesson or problem seeds a real workspace
+  session: the statement becomes the spec, a working checklist becomes the
+  requirements, and the starter code becomes the first cell, so Psirver
+  execution, the tutor, and the timeline all just work.
+- **"More like this" problem generation** — the local model writes a fresh
+  variant of a problem you struggled on (same pattern, new story), optionally
+  steered by your note about what tripped you up and your attempted code.
+  Variants are saved into the bank and linked to their source problem.
+- New backend routes under `/practice/*`, with the built-in bank seeded
+  idempotently at startup.
+
 ## [1.0.0] - 2026-05-30
 
 First release. Whetstone is a local-first, offline CS problem-solving

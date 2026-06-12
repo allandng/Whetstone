@@ -98,6 +98,69 @@ export type SpecImportResponse = {
   status: string;
 };
 
+// --- Practice: problems and course (routers/practice.py) -------------------
+
+export type ProblemDifficulty = "easy" | "medium" | "hard";
+export type ProblemSource = "builtin" | "generated";
+export type ProblemStatus = "not_started" | "attempted" | "struggled" | "solved";
+
+export type ProblemExample = {
+  input: string;
+  output: string;
+  explanation: string;
+};
+
+export type ProblemRead = {
+  id: string;
+  slug: string;
+  title: string;
+  pattern: string;
+  pattern_label: string;
+  difficulty: ProblemDifficulty;
+  prompt: string;
+  examples: ProblemExample[];
+  hints: string[];
+  starter_code: string;
+  language: string;
+  source: ProblemSource;
+  parent_problem_id: string | null;
+  status: ProblemStatus;
+  created_at: string;
+};
+
+export type ProblemUpdate = {
+  status: ProblemStatus;
+};
+
+export type GenerateSimilarRequest = {
+  note?: string | null;
+  code?: string | null;
+};
+
+export type PracticeStartResponse = {
+  session_id: string;
+  spec_id: string;
+};
+
+export type LessonExercise = {
+  description: string;
+  starter_code: string;
+  language: string;
+};
+
+export type LessonRead = {
+  id: string;
+  title: string;
+  summary: string;
+  body: string;
+  exercise: LessonExercise;
+  completed: boolean;
+};
+
+export type LessonProgressUpdate = {
+  completed: boolean;
+};
+
 // --- AI co-pilot (routers/ai.py) -------------------------------------------
 
 export type AiMode = "direct" | "socratic";
