@@ -26,6 +26,7 @@ from fastapi import (
     HTTPException,
     UploadFile,
 )
+from fastapi.concurrency import run_in_threadpool
 from sqlmodel import Session as DBSession
 from sqlmodel import select
 
@@ -162,7 +163,16 @@ async def _resolve_source(
         name = (file.filename or "").lower()
         content_type = (file.content_type or "").lower()
         if name.endswith(".pdf") or "pdf" in content_type:
-            return SourceType.pdf, extract_pdf_text(data)
+            # pdfplumber is CPU-bound and a classic decompression-bomb target, so
+            # run it off the event loop to avoid blocking every other request,
+            # and surface a parse failure as a 400 rather than a generic 500.
+            try:
+                text = await run_in_threadpool(extract_pdf_text, data)
+            except Exception as exc:  # noqa: BLE001 - any pdf parse failure -> 400
+                raise HTTPException(
+                    status_code=400, detail="Could not read the PDF file."
+                ) from exc
+            return SourceType.pdf, text
         return SourceType.text, data.decode("utf-8", errors="replace")
 
     if raw_text is not None and raw_text.strip():

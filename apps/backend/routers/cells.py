@@ -185,6 +185,13 @@ async def _execute(cell: Cell) -> tuple[str, str]:
             if job.get("status") in _TERMINAL_STATES:
                 return _normalize_result(job)
             await asyncio.sleep(_POLL_INTERVAL_SECONDS)
+        # Timed out: ask Psirver to terminate the runaway so it doesn't keep
+        # consuming resources after we stop tracking it. Best effort — the
+        # timeout result stands regardless of whether the kill request lands.
+        try:
+            await psirver_client.terminate_job(job_id)
+        except (PsirverUnavailableError, httpx.HTTPError):
+            pass
         return "timeout", "Execution did not finish within the time limit."
     except ValueError as exc:  # unsupported language
         return "error", str(exc)

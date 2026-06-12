@@ -1047,3 +1047,35 @@ def test_ai_transcribe_stt_unreachable_returns_503_not_500(client, monkeypatch):
     # A dead whisper-server is a clean 503, not a 500 stack trace.
     assert resp.status_code == 503, resp.text
     assert "reachable" in resp.json()["detail"].lower()
+
+
+# --- Upload limits & robustness ---------------------------------------------
+
+
+def test_oversized_body_rejected_with_413(client):
+    """A request whose Content-Length exceeds the cap is refused up front."""
+
+    from config import get_settings
+
+    settings = get_settings()
+    original = settings.max_upload_bytes
+    settings.max_upload_bytes = 1024
+    try:
+        resp = client.post(
+            "/specs/import",
+            content=b"x" * 4096,
+            headers={"content-type": "application/octet-stream"},
+        )
+        assert resp.status_code == 413, resp.text
+    finally:
+        settings.max_upload_bytes = original
+
+
+def test_malformed_pdf_returns_400_not_500(client):
+    """A file that claims to be a PDF but isn't surfaces as a client error."""
+
+    resp = client.post(
+        "/specs/import",
+        files={"file": ("broken.pdf", b"not a real pdf at all", "application/pdf")},
+    )
+    assert resp.status_code == 400, resp.text
