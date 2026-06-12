@@ -20,6 +20,8 @@ Three things make it different from a notebook with a chatbot bolted on:
 - **It tutors instead of solving.** A Socratic mode answers your questions with questions and incremental hints. When you genuinely want the answer, you can ask for it - and the app tells you plainly when it's handing you a full solution versus a nudge.
 - **It records how you think.** Every edit, run, error, and AI exchange goes into a session timeline you can replay. Think of it as a debugger for your own problem-solving process.
 
+There is also a **Practice** area for the time between assignments: a beginner "learn to code" course with runnable exercises, and a DSA problem bank organized by interview pattern (two pointers, sliding window, monotonic stack, ...). Every lesson and problem opens straight into the workspace as a real session — starter code, a requirement checklist, the tutor. And because the model runs locally, Whetstone can put it to work *authoring*: when a problem trips you up, one click has the local model write a brand-new variant exercising the same pattern, optionally steered by your own note about what went wrong.
+
 ## Why I built it
 
 Most AI coding help is cloud-based and answer-shaped. That's a bad fit for two reasons students feel directly: privacy (your code and your professor's spec get shipped to someone else's server) and learning (a tool that just writes the answer teaches you nothing and walks straight into academic-integrity trouble).
@@ -43,6 +45,8 @@ v1.0. The requirements are specified (see [`docs/Whetstone_SRS.md`](docs/Whetsto
 | Session event log + timeline endpoint | Done |
 | Timeline replay (step-back scrubber over the event log) | Done |
 | Voice input (Whisper STT → co-pilot dictation) | Done |
+| Practice: beginner course + pattern-organized DSA bank | Done |
+| LLM-generated problem variants ("more like this") | Done |
 | Execution hardening (per-job rlimits, fd hygiene, env scrubbing) | Done |
 | Restricted CORS + production error handling | Done |
 | CI (backend + frontend tests) | Done |

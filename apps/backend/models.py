@@ -9,6 +9,10 @@ described in the SRS:
 - :class:`RequirementItem` - a tracked checklist item parsed from a spec.
 - :class:`Event`           - an append-only timeline entry (edit, run,
                              error, AI exchange) used for replay.
+- :class:`Problem`         - a DSA practice problem (built-in or generated
+                             by the local model from one the user struggled on).
+- :class:`LessonProgress`  - per-lesson completion for the beginner course
+                             (the lessons themselves are static content).
 
 :class:`CellRequirementLink` is the association table backing the
 many-to-many relationship between cells and requirement items, so a cell
@@ -118,6 +122,73 @@ class RequirementItem(SQLModel, table=True):
     cells: list["Cell"] = Relationship(
         back_populates="requirements", link_model=CellRequirementLink
     )
+
+
+class ProblemDifficulty(str, Enum):
+    """Difficulty band for a practice problem."""
+
+    easy = "easy"
+    medium = "medium"
+    hard = "hard"
+
+
+class ProblemSource(str, Enum):
+    """Where a practice problem came from."""
+
+    builtin = "builtin"
+    generated = "generated"
+
+
+class ProblemStatus(str, Enum):
+    """The user's progress on a practice problem (single-user, local app)."""
+
+    not_started = "not_started"
+    attempted = "attempted"
+    struggled = "struggled"
+    solved = "solved"
+
+
+class Problem(SQLModel, table=True):
+    """A DSA practice problem.
+
+    Built-in problems are seeded from :mod:`content.problems` on startup
+    (keyed by ``slug`` so reseeding is idempotent). Generated problems are
+    written by the local model as variants of a problem the user struggled
+    on; ``parent_problem_id`` links a variant back to its source.
+
+    ``examples`` and ``hints`` are JSON-encoded strings (same convention as
+    ``Event.payload``): a list of ``{input, output, explanation}`` dicts and
+    a graded list of hint strings respectively.
+    """
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    slug: str = Field(unique=True, index=True)
+    title: str = Field(default="Untitled problem")
+    pattern: str = Field(default="general", index=True)
+    difficulty: ProblemDifficulty = Field(default=ProblemDifficulty.easy)
+    prompt: str = Field(default="")
+    examples: str = Field(default="[]", description="JSON-encoded example list.")
+    hints: str = Field(default="[]", description="JSON-encoded hint list.")
+    starter_code: str = Field(default="")
+    language: str = Field(default="python")
+    source: ProblemSource = Field(default=ProblemSource.builtin)
+    parent_problem_id: Optional[uuid.UUID] = Field(
+        default=None, foreign_key="problem.id", index=True
+    )
+    status: ProblemStatus = Field(default=ProblemStatus.not_started)
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+class LessonProgress(SQLModel, table=True):
+    """Completion state for one beginner-course lesson.
+
+    The course content is static (see :mod:`content.course`); only the
+    user's progress is persisted, keyed by the lesson's stable slug.
+    """
+
+    lesson_id: str = Field(primary_key=True)
+    completed: bool = Field(default=False)
+    updated_at: datetime = Field(default_factory=_utcnow)
 
 
 class Event(SQLModel, table=True):

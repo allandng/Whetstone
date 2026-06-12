@@ -3,6 +3,7 @@ import {
   API_BASE,
   createCell,
   createSession,
+  getSession,
   listRequirements,
   listSessionCells,
   listSessions,
@@ -80,9 +81,13 @@ function uid(): string {
 
 type Props = {
   onNavigateHome: () => void;
+  /** Open this exact session (e.g. one seeded from the Practice tab) instead
+   *  of the default most-recently-modified pick. The parent re-keys this
+   *  component when it changes, so the bootstrap effect reads it once. */
+  sessionId?: string | null;
 };
 
-export function WorkspaceLayout({ onNavigateHome }: Props) {
+export function WorkspaceLayout({ onNavigateHome, sessionId }: Props) {
   const [session, setSession] = useState<SessionRead | null>(null);
   const [online, setOnline] = useState(true);
   const [bootstrapped, setBootstrapped] = useState(false);
@@ -143,15 +148,29 @@ export function WorkspaceLayout({ onNavigateHome }: Props) {
   const patchCell = (cellId: string, patch: Partial<NotebookCell>) =>
     setCells((cs) => cs.map((c) => (c.id === cellId ? { ...c, ...patch } : c)));
 
-  // Bootstrap: reuse the most recently modified session (else create one), then
+  // Bootstrap: open the requested session if one was handed over (Practice),
+  // else reuse the most recently modified session (else create one), then
   // restore its cells and their last outputs. If the backend is unreachable,
   // fall back to a local-only shell with one starter cell (offline-first).
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const sessions = await listSessions();
-        const picked = sessions[0] ?? (await createSession({ title: "Whetstone workspace" }));
+        // A stale handed-over id (e.g. the session was deleted) 404s; fall
+        // back to the default pick. Any other failure (network, 500) rethrows
+        // into the offline path below — silently opening a *different*
+        // session than the one handed over would be worse than the offline
+        // shell.
+        const requested = sessionId
+          ? await getSession(sessionId).catch((err) => {
+              if ((err as ApiError)?.status === 404) return null;
+              throw err;
+            })
+          : null;
+        const picked =
+          requested ??
+          (await listSessions())[0] ??
+          (await createSession({ title: "Whetstone workspace" }));
         if (cancelled) return;
         setSession(picked);
         setOnline(true);
@@ -214,7 +233,7 @@ export function WorkspaceLayout({ onNavigateHome }: Props) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [sessionId]);
 
   const changeRequirementStatus = async (id: string, status: RequirementStatus) => {
     const prev = requirements;

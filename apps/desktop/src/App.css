@@ -154,6 +154,166 @@ button {
   margin-right: 5px;
 }
 
+/* --- Practice (course + DSA problem bank) -------------------------------- */
+
+.practice {
+  max-width: 1040px;
+  margin: 0 auto;
+  text-align: left;
+}
+
+.practice h1 {
+  text-align: left;
+  margin-bottom: 0.5rem;
+}
+
+.practice-tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.25);
+  padding-bottom: 0.75rem;
+}
+
+.practice-tab.is-active {
+  background-color: #396cd8;
+  color: #ffffff;
+}
+
+.practice-split {
+  display: flex;
+  gap: 1.5rem;
+  align-items: flex-start;
+}
+
+.practice-list {
+  flex: 0 0 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  position: sticky;
+  top: 0;
+}
+
+.practice-list__meter {
+  font-size: 0.85rem;
+  opacity: 0.75;
+  padding: 0 0.25rem 0.25rem;
+}
+
+.practice-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  text-align: left;
+  padding: 0.55rem 0.75rem;
+}
+
+.practice-item.is-selected {
+  border-color: #396cd8;
+}
+
+.practice-item__title {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.practice-item__sub {
+  font-size: 0.8rem;
+  font-weight: 400;
+  opacity: 0.7;
+}
+
+.practice-detail {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.practice-detail h2 {
+  margin-top: 0;
+}
+
+.practice-detail__meta {
+  font-size: 0.85rem;
+  opacity: 0.75;
+  margin-top: -0.5rem;
+}
+
+.practice-richtext__prose {
+  white-space: pre-wrap;
+  line-height: 1.55;
+}
+
+.practice-richtext pre,
+.practice-exercise pre,
+.practice-example pre {
+  background-color: rgba(127, 127, 127, 0.12);
+  border: 1px solid rgba(127, 127, 127, 0.2);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  text-align: left;
+}
+
+.practice-richtext code {
+  background-color: rgba(127, 127, 127, 0.15);
+  border-radius: 4px;
+  padding: 0.05em 0.3em;
+  font-size: 0.9em;
+}
+
+.practice-exercise,
+.practice-examples,
+.practice-hints,
+.practice-generate {
+  margin-top: 1.25rem;
+}
+
+.practice-exercise h3,
+.practice-examples h3,
+.practice-hints h3,
+.practice-generate h3 {
+  margin-bottom: 0.4rem;
+}
+
+.practice-example p {
+  font-size: 0.9rem;
+  opacity: 0.85;
+  margin-top: 0.25rem;
+}
+
+.practice-hint {
+  border-left: 3px solid #396cd8;
+  padding-left: 0.75rem;
+  margin: 0.4rem 0;
+}
+
+.practice-actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-top: 1.25rem;
+}
+
+.practice-generate input {
+  width: 100%;
+  max-width: 460px;
+  display: block;
+  margin: 0.5rem 0;
+}
+
+.practice-error {
+  color: #c0392b;
+  font-weight: 500;
+}
+
+.practice-empty {
+  opacity: 0.7;
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     color: #f6f6f6;

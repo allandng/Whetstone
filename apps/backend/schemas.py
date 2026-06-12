@@ -14,7 +14,14 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict
 
-from models import CellType, RequirementStatus, SourceType
+from models import (
+    CellType,
+    ProblemDifficulty,
+    ProblemSource,
+    ProblemStatus,
+    RequirementStatus,
+    SourceType,
+)
 
 
 class SessionRead(BaseModel):
@@ -130,6 +137,90 @@ class CellUpdate(BaseModel):
     cell_type: Optional[CellType] = None
     language: Optional[str] = None
     order_index: Optional[int] = None
+
+
+# --- Practice: problems and course ------------------------------------------
+
+
+class ProblemExample(BaseModel):
+    """One worked example in a practice problem statement."""
+
+    input: str = ""
+    output: str = ""
+    explanation: str = ""
+
+
+class ProblemRead(BaseModel):
+    """Response schema for a :class:`models.Problem`.
+
+    ``examples`` and ``hints`` are decoded from their JSON-string columns by
+    the router (this is not built via ``from_attributes``).
+    """
+
+    id: uuid.UUID
+    slug: str
+    title: str
+    pattern: str
+    pattern_label: str
+    difficulty: ProblemDifficulty
+    prompt: str
+    examples: list[ProblemExample]
+    hints: list[str]
+    starter_code: str
+    language: str
+    source: ProblemSource
+    parent_problem_id: Optional[uuid.UUID]
+    status: ProblemStatus
+    created_at: datetime
+
+
+class ProblemUpdate(BaseModel):
+    """Request body for ``PATCH /practice/problems/{id}`` (progress only)."""
+
+    status: ProblemStatus
+
+
+class GenerateSimilarRequest(BaseModel):
+    """Request body for ``POST /practice/problems/{id}/similar``.
+
+    Both fields are optional context for the generator: the user's own note
+    about what they struggled with, and their attempted code.
+    """
+
+    note: Optional[str] = None
+    code: Optional[str] = None
+
+
+class PracticeStartResponse(BaseModel):
+    """Returned by the start-practice routes: the workspace session to open."""
+
+    session_id: uuid.UUID
+    spec_id: uuid.UUID
+
+
+class LessonExercise(BaseModel):
+    """The hands-on exercise attached to a course lesson."""
+
+    description: str
+    starter_code: str
+    language: str = "python"
+
+
+class LessonRead(BaseModel):
+    """One beginner-course lesson, merged with the user's progress."""
+
+    id: str
+    title: str
+    summary: str
+    body: str
+    exercise: LessonExercise
+    completed: bool
+
+
+class LessonProgressUpdate(BaseModel):
+    """Request body for ``PATCH /practice/course/{lesson_id}``."""
+
+    completed: bool
 
 
 # --- Session timeline ------------------------------------------------------

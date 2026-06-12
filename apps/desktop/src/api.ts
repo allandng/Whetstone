@@ -13,6 +13,12 @@ import type {
   CellUpdate,
   ComplexityResponse,
   ExplainErrorResponse,
+  GenerateSimilarRequest,
+  LessonRead,
+  PracticeStartResponse,
+  ProblemDifficulty,
+  ProblemRead,
+  ProblemStatus,
   RequirementItemRead,
   RequirementUpdate,
   SessionCreate,
@@ -143,6 +149,64 @@ export function importSpec(input: {
       return (await res.json()) as SpecImportResponse;
     },
   );
+}
+
+// --- Practice: problems and course ------------------------------------------
+
+export function listProblems(filters?: {
+  pattern?: string;
+  difficulty?: ProblemDifficulty;
+  status?: ProblemStatus;
+}): Promise<ProblemRead[]> {
+  const params = new URLSearchParams();
+  if (filters?.pattern) params.set("pattern", filters.pattern);
+  if (filters?.difficulty) params.set("difficulty", filters.difficulty);
+  if (filters?.status) params.set("status", filters.status);
+  const qs = params.toString();
+  return json<ProblemRead[]>("GET", `/practice/problems${qs ? `?${qs}` : ""}`);
+}
+
+export function getProblem(problemId: string): Promise<ProblemRead> {
+  return json<ProblemRead>("GET", `/practice/problems/${enc(problemId)}`);
+}
+
+export function updateProblemStatus(
+  problemId: string,
+  status: ProblemStatus,
+): Promise<ProblemRead> {
+  return json<ProblemRead>("PATCH", `/practice/problems/${enc(problemId)}`, { status });
+}
+
+/** Seed a workspace session with this problem (spec + checklist + starter
+ *  cell) and return the session to open. */
+export function startProblem(problemId: string): Promise<PracticeStartResponse> {
+  return json<PracticeStartResponse>("POST", `/practice/problems/${enc(problemId)}/start`);
+}
+
+/** Ask the local model to write a fresh variant of a problem the user
+ *  struggled on. Slow (local inference) — callers should show a busy state.
+ *  503 = llama-server down; 502 = reply unparseable (worth a retry). */
+export function generateSimilarProblem(
+  problemId: string,
+  body: GenerateSimilarRequest = {},
+): Promise<ProblemRead> {
+  return json<ProblemRead>("POST", `/practice/problems/${enc(problemId)}/similar`, body);
+}
+
+export function listCourse(): Promise<LessonRead[]> {
+  return json<LessonRead[]>("GET", "/practice/course");
+}
+
+export function updateLessonProgress(
+  lessonId: string,
+  completed: boolean,
+): Promise<LessonRead> {
+  return json<LessonRead>("PATCH", `/practice/course/${enc(lessonId)}`, { completed });
+}
+
+/** Seed a workspace session with this lesson's exercise. */
+export function startLesson(lessonId: string): Promise<PracticeStartResponse> {
+  return json<PracticeStartResponse>("POST", `/practice/course/${enc(lessonId)}/start`);
 }
 
 // --- AI co-pilot -----------------------------------------------------------

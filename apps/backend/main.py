@@ -2,7 +2,7 @@
 
 Builds the app, wires CORS for the Tauri frontend, initializes the
 database on startup, and mounts the feature routers (sessions, cells,
-ai, spec). Run locally with::
+ai, spec, practice). Run locally with::
 
     uvicorn main:app --reload
 
@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse
 
 from config import get_settings
 from db import create_db_and_tables
-from routers import ai, cells, sessions, spec
+from routers import ai, cells, practice, sessions, spec
 
 logger = logging.getLogger("whetstone")
 
@@ -30,6 +30,7 @@ async def lifespan(app: FastAPI):
     """Initialize resources on startup; tear down on shutdown."""
 
     create_db_and_tables()
+    practice.seed_builtin_problems()
     yield
 
 
@@ -97,6 +98,7 @@ def create_app() -> FastAPI:
     app.include_router(cells.router)
     app.include_router(ai.router)
     app.include_router(spec.router)
+    app.include_router(practice.router)
 
     @app.get("/health", tags=["meta"])
     async def health() -> dict:

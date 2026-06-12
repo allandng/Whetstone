@@ -29,7 +29,7 @@ from sqlmodel import select
 
 from db import get_session, session_scope
 from events import emit_event
-from models import Cell, Event, RequirementItem, Session as SessionModel
+from models import Cell, Event, RequirementItem, Session as SessionModel, Spec
 from services.llm_client import LLMClient, LLMUnavailableError
 from services.stt_client import STTClient, STTUnavailableError
 
@@ -57,6 +57,7 @@ _VERIFY_LINE = "This is the model's reasoning — verify it yourself."
 _MAX_CELL_CHARS = 4000
 _MAX_OUTPUT_CHARS = 2000
 _MAX_EXCHANGE_CHARS = 600
+_MAX_SPEC_CHARS = 4000
 
 
 # --- Request models --------------------------------------------------------
@@ -278,6 +279,16 @@ def _assemble_context(
 
     session = db.get(SessionModel, session_id)
     if session is not None and session.spec_id is not None:
+        # The spec's own text, truncated. For imported assignments the
+        # extracted requirements carry the substance, but practice sessions
+        # store the full problem statement (story, constraints, examples)
+        # only in raw_text — without it the tutor is blind to the problem.
+        spec = db.get(Spec, session.spec_id)
+        if spec is not None and spec.raw_text.strip():
+            parts.append(
+                "Assignment / problem statement for this session:\n"
+                + _truncate(spec.raw_text, _MAX_SPEC_CHARS)
+            )
         requirements = db.exec(
             select(RequirementItem).where(
                 RequirementItem.spec_id == session.spec_id

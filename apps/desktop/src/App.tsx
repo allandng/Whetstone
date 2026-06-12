@@ -1,9 +1,10 @@
 import { useState } from "react";
 import Timeline from "./components/Timeline";
 import { WorkspaceLayout } from "./workspace/WorkspaceLayout";
+import { PracticeView } from "./practice/PracticeView";
 import "./App.css";
 
-type View = "workspace" | "home" | "timeline";
+type View = "workspace" | "home" | "timeline" | "practice";
 
 function HomeView() {
   return (
@@ -16,8 +17,11 @@ function HomeView() {
       <p>
         The <strong>Workspace</strong> is where you do the work: write and run
         cells, track spec requirements, ask the co-pilot, and replay your
-        session timeline. The <strong>Timeline</strong> tab loads any session by
-        id. Use the sidebar to switch between them.
+        session timeline. <strong>Practice</strong> holds the beginner coding
+        course and a DSA problem bank — your local model can even write new
+        problems shaped like the ones you struggle with. The{" "}
+        <strong>Timeline</strong> tab loads any session by id. Use the sidebar
+        to switch between them.
       </p>
     </div>
   );
@@ -51,11 +55,32 @@ function TimelineView() {
 
 function App() {
   const [view, setView] = useState<View>("workspace");
+  // When Practice starts a session, the workspace opens that exact session
+  // instead of its usual most-recently-modified pick.
+  const [workspaceSessionId, setWorkspaceSessionId] = useState<string | null>(null);
+
+  const openSessionInWorkspace = (sessionId: string) => {
+    setWorkspaceSessionId(sessionId);
+    setView("workspace");
+  };
 
   // The workspace owns the full window (its own dark theme + chrome); the
-  // legacy Home/Timeline views keep the sidebar shell.
+  // legacy Home/Timeline/Practice views keep the sidebar shell. Keying by
+  // session forces a clean re-bootstrap when Practice hands over a session.
   if (view === "workspace") {
-    return <WorkspaceLayout onNavigateHome={() => setView("home")} />;
+    return (
+      <WorkspaceLayout
+        key={workspaceSessionId ?? "latest"}
+        sessionId={workspaceSessionId}
+        onNavigateHome={() => {
+          // Leaving the workspace consumes the Practice handoff: the next
+          // plain visit resumes the most-recently-modified session again
+          // instead of staying pinned to the handed-over one forever.
+          setWorkspaceSessionId(null);
+          setView("home");
+        }}
+      />
+    );
   }
 
   return (
@@ -68,6 +93,15 @@ function App() {
           onClick={() => setView("workspace")}
         >
           Workspace
+        </button>
+        <button
+          type="button"
+          className={
+            view === "practice" ? "sidebar__link is-active" : "sidebar__link"
+          }
+          onClick={() => setView("practice")}
+        >
+          Practice
         </button>
         <button
           type="button"
@@ -87,7 +121,13 @@ function App() {
         </button>
       </nav>
       <main className="content">
-        {view === "home" ? <HomeView /> : <TimelineView />}
+        {view === "home" ? (
+          <HomeView />
+        ) : view === "practice" ? (
+          <PracticeView onOpenSession={openSessionInWorkspace} />
+        ) : (
+          <TimelineView />
+        )}
       </main>
     </div>
   );
