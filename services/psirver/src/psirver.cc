@@ -39,7 +39,9 @@ void reply(int client, const char *status_line, const char *body)
 
   write(client, headers.data(), headers.size());
   write(client, body, strlen(body));
-  close(client);
+  // The socket is closed by the owner — ~Task() for a dispatched task, or the
+  // error paths in request2task() for a request that never became one. Closing
+  // here too would double-close the fd and could sever a reused descriptor.
 }
 
 // Reply with a length-delimited body and an explicit content type. Unlike
@@ -63,7 +65,7 @@ void reply_data(int client, const char *status_line, const std::string &body,
 
   write(client, headers.data(), headers.size());
   write(client, body.data(), body.size());
-  close(client);
+  // See reply(): the fd's owner closes it, not this function.
 }
 
 int init_socket(uint16_t port)
@@ -181,6 +183,15 @@ Task *request2task()
     return nullptr;
   }
 
+  // Bound the blocking header/body reads so a client that connects and then
+  // stalls (slowloris) can't hang the single-threaded accept loop forever: a
+  // read that makes no progress within the window returns EAGAIN, which the
+  // read paths below treat as a closed connection. Best effort.
+  struct timeval rcv_timeout{};
+  rcv_timeout.tv_sec = 15;
+  setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &rcv_timeout, sizeof(rcv_timeout));
+  setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &rcv_timeout, sizeof(rcv_timeout));
+
   char buffer[READ_BUFFER_SZ];
   size_t header_end_pos = std::string::npos;
   ssize_t chunk_sz;
@@ -202,6 +213,7 @@ Task *request2task()
 
   if (request.size() > MAX_REQUEST_SZ) {
     reply(client, "HTTP/1.1 413 Content Too Large", "Content Too Large");
+    close(client);  // no Task owns this fd; reply() no longer closes
     return nullptr;
   }
 
@@ -212,6 +224,7 @@ Task *request2task()
 
     if(!task) {
       reply(client, "HTTP/1.1 400 Bad Request", "Bad Request");
+      close(client);
       return nullptr;
     }
 
@@ -223,6 +236,9 @@ Task *request2task()
     ssize_t content_length = parse_content_length(client, headers);
 
     if (content_length < 0) {
+      // parse_content_length() already sent the error reply; close the fd it
+      // wrote to (reply() no longer closes).
+      close(client);
       return nullptr;
     }
 
@@ -232,6 +248,7 @@ Task *request2task()
     Task *task = Task::construct(client, headers, body);
     if(!task) {
       reply(client, "HTTP/1.1 400 Bad Request", "Bad Request");
+      close(client);
       return nullptr;
     }
 
@@ -240,6 +257,7 @@ Task *request2task()
 
   reply(client, "HTTP/1.1 405 Method Not Allowed",
 	(request.substr(0, 0x10) + "...").c_str());
+  close(client);
   return nullptr;
 }
 

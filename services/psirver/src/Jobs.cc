@@ -7,11 +7,17 @@
 #include <string>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <unistd.h>
 
 #include "Limits.hh"
 #include "utils.hh"
 
 JobManager job_manager;
+
+// Cap on retained jobs. Beyond this, create() drops the oldest *terminal* jobs
+// (and removes their capture files) so neither the in-memory table nor the
+// jobs/ directory grows without bound over a long server lifetime.
+static constexpr std::size_t MAX_RETAINED_JOBS = 512;
 
 const char *to_string(JobStatus status)
 {
@@ -36,9 +42,36 @@ void JobManager::start()
   }
 }
 
+void JobManager::evict_terminal_locked()
+{
+  // Caller holds mu_. Remove the lowest-id terminal jobs (ids are monotonic, so
+  // lowest == oldest) until the table is back under the cap, or no terminal job
+  // remains to evict.
+  while (jobs_.size() >= MAX_RETAINED_JOBS) {
+    int victim = -1;
+    for (const auto &kv : jobs_) {
+      const JobStatus s = kv.second.status;
+      const bool terminal = s == JobStatus::Completed ||
+                            s == JobStatus::Failed ||
+                            s == JobStatus::Terminated;
+      if (terminal && (victim < 0 || kv.first < victim)) {
+        victim = kv.first;
+      }
+    }
+    if (victim < 0) {
+      break; // nothing terminal to evict; never drop a queued/running job
+    }
+    auto it = jobs_.find(victim);
+    ::unlink(it->second.stdout_path.c_str());
+    ::unlink(it->second.stderr_path.c_str());
+    jobs_.erase(it);
+  }
+}
+
 int JobManager::create(int script_id)
 {
   std::lock_guard<std::mutex> lock(mu_);
+  evict_terminal_locked();
   const int id = next_id_++;
 
   Job job;
