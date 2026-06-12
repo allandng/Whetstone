@@ -15,6 +15,7 @@ import {
   type CellRead,
 } from "../api";
 import type { AiMode, AskRequest, RequirementItemRead, RequirementStatus, SessionRead } from "../types";
+import { blobToWav } from "../audio";
 import { Header, type VoiceState } from "./Header";
 import { RequirementsPane } from "./RequirementsPane";
 import { NotebookPane, type NotebookCell } from "./NotebookPane";
@@ -99,6 +100,10 @@ export function WorkspaceLayout({ onNavigateHome }: Props) {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  // Synchronous guard against a double-start during the getUserMedia await
+  // (e.g. a second click while the mic-permission prompt is up), which would
+  // otherwise leak the first stream. Checked before any await in startRecording.
+  const recordingStartRef = useRef(false);
 
   // Notebook cells, in display order.
   const [cells, setCells] = useState<NotebookCell[]>([]);
@@ -108,8 +113,24 @@ export function WorkspaceLayout({ onNavigateHome }: Props) {
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
   // Per-cell content last synced to the server, so we only PUT on real edits.
   const lastSyncedRef = useRef<Map<string, string>>(new Map());
+  // Per-cell debounce timers for autosaving edits, so an edit-then-quit doesn't
+  // lose work (content was previously only persisted on Run). The pending map
+  // holds the latest unsaved content per cell so it can be flushed on unmount.
+  const syncTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const pendingContentRef = useRef<Map<string, string>>(new Map());
   // Per-cell in-flight run controllers, so each cell cancels independently.
   const runAbortRef = useRef<Map<string, AbortController>>(new Map());
+
+  // Fresh online/session values for the debounced autosave, which fires from a
+  // timer and would otherwise capture stale closure values.
+  const onlineRef = useRef(online);
+  onlineRef.current = online;
+  const sessionRef = useRef<SessionRead | null>(session);
+  sessionRef.current = session;
+
+  // Autosave debounce window (ms): long enough to coalesce typing, short enough
+  // that a pause-then-quit still persists.
+  const AUTOSAVE_MS = 800;
 
   // Co-pilot.
   const [thread, setThread] = useState<ChatMessage[]>([]);
@@ -207,7 +228,41 @@ export function WorkspaceLayout({ onNavigateHome }: Props) {
     }
   };
 
-  const changeCellContent = (cellId: string, content: string) => patchCell(cellId, { content });
+  // Persist a cell's edited content to the server (best effort). Only touches
+  // known server cells with a real change; failures surface in the footer but
+  // don't disrupt editing. Returns nothing — fire-and-forget on autosave.
+  const flushCell = async (cellId: string, content: string) => {
+    pendingContentRef.current.delete(cellId);
+    if (!onlineRef.current || !sessionRef.current) return;
+    if (!lastSyncedRef.current.has(cellId)) return; // local-only / unknown cell
+    if (lastSyncedRef.current.get(cellId) === content) return; // nothing new
+    try {
+      await updateCell(cellId, { content });
+      lastSyncedRef.current.set(cellId, content);
+    } catch (err) {
+      const e = err as ApiError;
+      setLastActivity(`Autosave failed: ${e?.message ?? String(err)}`);
+    }
+  };
+
+  const scheduleSync = (cellId: string, content: string) => {
+    pendingContentRef.current.set(cellId, content);
+    const timers = syncTimersRef.current;
+    const existing = timers.get(cellId);
+    if (existing) clearTimeout(existing);
+    timers.set(
+      cellId,
+      setTimeout(() => {
+        timers.delete(cellId);
+        void flushCell(cellId, content);
+      }, AUTOSAVE_MS),
+    );
+  };
+
+  const changeCellContent = (cellId: string, content: string) => {
+    patchCell(cellId, { content });
+    scheduleSync(cellId, content);
+  };
 
   const focusCell = (cellId: string) => setActiveCellId(cellId);
 
@@ -250,6 +305,13 @@ export function WorkspaceLayout({ onNavigateHome }: Props) {
     setActiveCellId(cellId);
     patchCell(cellId, { running: true, note: null });
     setLastActivity("Running cell on the local engine…");
+    // A run persists the cell itself below, so cancel any pending autosave to
+    // avoid a redundant PUT.
+    const pendingSync = syncTimersRef.current.get(cellId);
+    if (pendingSync) {
+      clearTimeout(pendingSync);
+      syncTimersRef.current.delete(cellId);
+    }
     const controller = new AbortController();
     runAbortRef.current.set(cellId, controller);
     try {
@@ -349,30 +411,36 @@ export function WorkspaceLayout({ onNavigateHome }: Props) {
   // --- Voice dictation -----------------------------------------------------
 
   const startRecording = async () => {
+    // Synchronous re-entry guard: set before any await so a second click during
+    // the getUserMedia prompt can't start a second stream and leak the first.
+    if (recordingStartRef.current || voiceState !== "idle") return;
     if (!online || !session) {
       setLastActivity("Voice blocked — backend offline");
       return;
     }
-    let stream: MediaStream;
+    recordingStartRef.current = true;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+      audioChunksRef.current = [];
+      const recorder = new MediaRecorder(stream);
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+      recorder.onstop = () => {
+        void finishRecording(recorder.mimeType);
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setVoiceState("recording");
+      setLastActivity("Recording — dictating to the co-pilot…");
     } catch {
       setLastActivity("Microphone unavailable — check permissions");
-      return;
+      mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+      mediaStreamRef.current = null;
+    } finally {
+      recordingStartRef.current = false;
     }
-    mediaStreamRef.current = stream;
-    audioChunksRef.current = [];
-    const recorder = new MediaRecorder(stream);
-    recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) audioChunksRef.current.push(e.data);
-    };
-    recorder.onstop = () => {
-      void finishRecording(recorder.mimeType);
-    };
-    mediaRecorderRef.current = recorder;
-    recorder.start();
-    setVoiceState("recording");
-    setLastActivity("Recording — dictating to the co-pilot…");
   };
 
   const stopRecording = () => {
@@ -395,8 +463,11 @@ export function WorkspaceLayout({ onNavigateHome }: Props) {
     setVoiceState("transcribing");
     setLastActivity("Transcribing on the local engine…");
     try {
-      const blob = new Blob(chunks, { type: mimeType || "audio/webm" });
-      const { transcript } = await transcribeAudio(blob);
+      const recorded = new Blob(chunks, { type: mimeType || "audio/webm" });
+      // Convert to 16 kHz mono WAV so whisper-server accepts it regardless of
+      // how it was launched (no ffmpeg/--convert dependency). See audio.ts.
+      const wav = await blobToWav(recorded);
+      const { transcript } = await transcribeAudio(wav);
       const clean = transcript.trim();
       if (clean) {
         setDraft((d) => (d ? `${d} ${clean}` : clean));
@@ -420,7 +491,11 @@ export function WorkspaceLayout({ onNavigateHome }: Props) {
 
   // Release the microphone if the workspace unmounts mid-recording. Drop the
   // onstop handler first so it doesn't fire transcription into a dead component.
+  // Also flush any pending cell autosaves so leaving the workspace doesn't drop
+  // an edit still sitting in its debounce window.
   useEffect(() => {
+    const timers = syncTimersRef.current;
+    const pending = pendingContentRef.current;
     return () => {
       const recorder = mediaRecorderRef.current;
       if (recorder) {
@@ -428,7 +503,12 @@ export function WorkspaceLayout({ onNavigateHome }: Props) {
         if (recorder.state !== "inactive") recorder.stop();
       }
       mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+      // Fire the pending autosave PUTs (best effort) and clear their timers.
+      timers.forEach((timer) => clearTimeout(timer));
+      timers.clear();
+      pending.forEach((content, cellId) => void flushCell(cellId, content));
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
