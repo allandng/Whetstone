@@ -89,9 +89,11 @@ The header should flip to **"Local engine · online"** and the footer to
      the local co-pilot."*
 
 4. **Socratic mode.** Switch the toggle to **Socratic Mode**.
-   **Expect:** an amber notice *"Socratic mode not yet wired — the backend
-   returns 501…"* and a **disabled** composer. (This is a scoped roadmap item;
-   `POST /ai/ask` with `mode=socratic` returns 501.)
+   **Expect:** the composer stays enabled and the pane note changes to describe
+   guiding questions and graded hints. Ask something and the reply leads with
+   questions/hints rather than a full answer (`POST /ai/ask` with
+   `mode=socratic`). With the LLM server down, the stream surfaces a co-pilot
+   error instead of an answer.
 
 5. **Timeline drawer.** Click **View full timeline** in the footer.
    **Expect:** a slide-up drawer with the live session's events (the same
