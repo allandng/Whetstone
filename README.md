@@ -224,7 +224,9 @@ tears all four down and frees their ports. If a model file, the Psirver binary,
 or a port is missing it fails up front with the exact reason rather than coming
 up half-wired. Full detail — ports, env vars, troubleshooting — is in
 [`RUNNING.md`](RUNNING.md), and [`SMOKE_TEST.md`](SMOKE_TEST.md) is a click-by-click
-acceptance pass.
+acceptance pass. Setting up on a fresh machine? Follow
+[`docs/cold-start-checklist.md`](docs/cold-start-checklist.md) — a from-clone,
+tick-the-box run-through with the failure points called out.
 
 ### Packaging (macOS bundle)
 
