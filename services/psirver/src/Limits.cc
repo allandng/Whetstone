@@ -2,18 +2,22 @@
 
 #include <cstdlib>
 
-// Read an unsigned environment override, multiplied by `scale` (e.g. MB ->
-// bytes). Returns `dflt` when the variable is unset or not a number.
+// Read an unsigned environment override and convert it to bytes via `scale`
+// (e.g. MB -> bytes). `dflt` is expressed in the SAME units as the env var
+// (e.g. MB), so it is scaled too — returning it raw would treat the default as
+// bytes and silently shrink the limit by a factor of `scale` (a 1024 MB FSIZE
+// default would become 1024 *bytes*). Returns the scaled default when the
+// variable is unset or not a number.
 static rlim_t env_rlim(const char *name, rlim_t dflt, rlim_t scale)
 {
   const char *v = std::getenv(name);
   if (!v || !*v) {
-    return dflt;
+    return dflt * scale;
   }
   char *end = nullptr;
   unsigned long long n = std::strtoull(v, &end, 10);
   if (end == v) {
-    return dflt; // not a number
+    return dflt * scale; // not a number
   }
   return static_cast<rlim_t>(n) * scale;
 }
